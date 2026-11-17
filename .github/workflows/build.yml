@@ -39,11 +39,19 @@ jobs:
         run: |
           sed -i 's/ndkVersion = "27.2.12479018"/ndkVersion = "28.2.13676358"/' android/app/build.gradle
           grep -n ndkVersion android/app/build.gradle
+          # 沙箱里改过的本地 file:// 分发地址必须在 CI 复原成官方 URL
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-9.5.0-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
+          cat android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/' android/gradle.properties
+          sed -i '/org.gradle.parallel/d;/org.gradle.daemon/d;/org.gradle.workers.max/d;/kotlin.compiler.execution.strategy/d;/kotlin.incremental/d' android/gradle.properties
+          cat android/gradle.properties
           flutter pub get
 
       - name: Build release APK
         working-directory: sparkshell
-        run: flutter build apk --release --target-platform android-arm64 --verbose 2>&1 | tail -120
+        run: |
+          set -o pipefail
+          flutter build apk --release --target-platform android-arm64 2>&1 | tail -40
 
       - name: Sign check (non-blocking)
         working-directory: sparkshell
