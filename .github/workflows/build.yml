@@ -52,9 +52,8 @@ jobs:
         run: |
           set -e
           sed -i 's/ndkVersion = "27.2.12479018"/ndkVersion = "28.2.13676358"/' android/app/build.gradle
-          sed -i 's/applicationId = "com.xinghuo.sparkshell"/applicationId = "com.grokggg.sparkshell"/' android/app/build.gradle
           python3 -c "import pathlib; p=pathlib.Path('android/app/build.gradle'); t=p.read_text(); t=t if 'packaging {' in t else t.replace('    externalNativeBuild {', '    packaging {\n        jniLibs {\n            excludes += [\"lib/armeabi-v7a/**\", \"lib/x86_64/**\"]\n        }\n    }\n\n    externalNativeBuild {'); p.write_text(t); print('packaging ok')"
-          grep -n 'applicationId\|namespace\|packaging' android/app/build.gradle
+          grep -n 'applicationId\|namespace\|packaging\|targetSdk' android/app/build.gradle || true
           sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.5.0-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
           cat android/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/' android/gradle.properties
