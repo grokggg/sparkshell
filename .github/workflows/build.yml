@@ -16,22 +16,8 @@ jobs:
 
       - name: Unpack source
         run: |
-          ls -la
           tar xzf sparkshell-src.tar.gz
           ls sparkshell
-
-      - name: Build Debian rootfs (arm64)
-        run: |
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap
-          sudo rm -rf /tmp/db
-          sudo debootstrap --arch=arm64 --foreign --variant=minbase \
-            --include=apt,bash,coreutils,curl,ca-certificates,git,python3,less,nano,procps,psmisc,file \
-            bookworm /tmp/db http://deb.debian.org/debian 2>&1 | tail -5
-          sudo mkdir -p sparkshell/assets
-          sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner -C /tmp/db .
-          sudo chown -R $(id -u):$(id -g) sparkshell/assets
-          ls -lh sparkshell/assets/rootfs.tar
 
       - uses: actions/setup-java@v4
         with:
@@ -44,52 +30,93 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Flutter doctor
-        run: flutter --version && flutter doctor -v | head -40
-
       - name: Configure project
         working-directory: sparkshell
         run: |
           set -e
           sed -i 's/ndkVersion = "27.2.12479018"/ndkVersion = "28.2.13676358"/' android/app/build.gradle
-          python3 -c "import pathlib; p=pathlib.Path('android/app/build.gradle'); t=p.read_text(); t=t if 'packaging {' in t else t.replace('    externalNativeBuild {', '    packaging {\n        jniLibs {\n            excludes += [\"lib/armeabi-v7a/**\", \"lib/x86_64/**\"]\n        }\n    }\n\n    externalNativeBuild {'); p.write_text(t); print('packaging ok')"
-          grep -n 'applicationId\|namespace\|packaging\|targetSdk' android/app/build.gradle || true
           sed -i 's|distributionUrl=.*|distributionUrl=https\://services.gradle.org/distributions/gradle-9.5.0-all.zip|' android/gradle/wrapper/gradle-wrapper.properties
-          cat android/gradle/wrapper/gradle-wrapper.properties
           sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g/' android/gradle.properties
           sed -i '/org.gradle.parallel/d;/org.gradle.daemon/d;/org.gradle.workers.max/d;/kotlin.compiler.execution.strategy/d;/kotlin.incremental/d' android/gradle.properties
-          cat android/gradle.properties
+          grep -n 'applicationId\|targetSdk\|abortOnError' android/app/build.gradle || true
           flutter pub get
 
-      - name: Build release APK
+      # ---------- 1) 小包：Alpine 3.6 MB，只为 30 秒验证 proot 链路 ----------
+      - name: Rootfs (alpine, 3.6 MB)
+        run: |
+          set -e
+          F=$(curl -s https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/ \
+              | grep -oE 'alpine-minirootfs-[0-9.]+-aarch64\.tar\.gz' | sort -u | tail -1)
+          echo "alpine=$F"
+          curl -sL -o /tmp/alpine.tgz "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/$F"
+          sudo rm -rf /tmp/alp && sudo mkdir -p /tmp/alp
+          sudo tar -xzf /tmp/alpine.tgz -C /tmp/alp
+          echo 'nameserver 223.5.5.5' | sudo tee /tmp/alp/etc/resolv.conf >/dev/null
+          rm -f sparkshell/assets/rootfs.tar
+          sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner -C /tmp/alp .
+          sudo chown -R $(id -u):$(id -g) sparkshell/assets
+          ls -lh sparkshell/assets/rootfs.tar
+
+      - name: Build APK (alpine)
         working-directory: sparkshell
         run: |
           set -o pipefail
-          flutter build apk --release --target-platform android-arm64 2>&1 | tail -40
+          flutter build apk --release --target-platform android-arm64 --dart-define=FLAVOR=alpine 2>&1 | tail -25
+          cp build/app/outputs/flutter-apk/app-release.apk /tmp/app-alpine.apk
+          ls -lh /tmp/app-alpine.apk
 
-      - name: Sign check (non-blocking)
+      # ---------- 2) 全量包：Debian bookworm，apt/python3/git 全在 ----------
+      - name: Rootfs (debian bookworm, arm64)
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap
+          sudo rm -rf /tmp/db
+          sudo debootstrap --arch=arm64 --foreign --variant=minbase \
+            --include=apt,bash,coreutils,curl,ca-certificates,git,python3,less,nano,procps,psmisc,file \
+            bookworm /tmp/db http://deb.debian.org/debian 2>&1 | tail -5
+          # /dev /proc /sys 由 proot 从宿主 bind 进来，打进包里只会让解包报 mknod 错
+          rm -f sparkshell/assets/rootfs.tar
+          sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner \
+            --exclude=./dev --exclude=./proc --exclude=./sys -C /tmp/db .
+          sudo chown -R $(id -u):$(id -g) sparkshell/assets
+          ls -lh sparkshell/assets/rootfs.tar
+
+      - name: Build APK (debian)
         working-directory: sparkshell
+        run: |
+          set -o pipefail
+          flutter build apk --release --target-platform android-arm64 --dart-define=FLAVOR=debian 2>&1 | tail -25
+          cp build/app/outputs/flutter-apk/app-release.apk /tmp/app-debian.apk
+          ls -lh /tmp/app-debian.apk
+
+      - name: Sign + hash
         continue-on-error: true
         run: |
-          set +e
-          APK=build/app/outputs/flutter-apk/app-release.apk
-          ls -lh $APK
           APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner -type f | head -1)
-          echo "apksigner=$APKSIGNER"
-          "$APKSIGNER" verify --print-certs "$APK"
-          sha256sum "$APK" | tee apk.sha256
+          for f in /tmp/app-alpine.apk /tmp/app-debian.apk; do
+            echo "== $f"; "$APKSIGNER" verify --print-certs "$f" | head -3; sha256sum "$f"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: sparkshell-apk
-          path: sparkshell/build/app/outputs/flutter-apk/app-release.apk
+          path: |
+            /tmp/app-alpine.apk
+            /tmp/app-debian.apk
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.0-apk
-          name: SparkShell 1.2.0 (Debian proot + PTY/SSH/WebRTC)
-          files: sparkshell/build/app/outputs/flutter-apk/app-release.apk
+          tag_name: v1.2.3-apk
+          name: SparkShell 1.2.3 (Debian/Alpine proot)
+          files: |
+            /tmp/app-alpine.apk
+            /tmp/app-debian.apk
           body: |
-            Flutter 3.50.0 + NDK 28.2 构建，仅 arm64-v8a，包名 com.grokggg.sparkshell，自签（sparkshell.jks）。
-            三个 Tab：本地 PTY（libptybridge.so）/ SSH（dartssh2）/ WebRTC（flutter_webrtc）。
+            两个包，装哪个都行：
+            - `app-alpine.apk`（约 36 MB）：Alpine rootfs，30 秒能下完，先用它验证 proot 链路是否通
+            - `app-debian.apk`（约 147 MB）：Debian bookworm + apt/python3/git，完整功能
+
+            包名 com.grokggg.sparkshell，arm64-v8a，自签证书。
+            修复：rootfs 解包不再以 tar 退出码判定（chown/mknod 必报错但文件完整），改校验关键路径，并把 tar 输出显示到界面上。
