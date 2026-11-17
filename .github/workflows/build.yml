@@ -108,8 +108,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.3-apk
-          name: SparkShell 1.2.3 (Debian/Alpine proot)
+          tag_name: v1.2.4-apk
+          name: SparkShell 1.2.4 (Debian/Alpine proot)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
