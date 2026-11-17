@@ -20,6 +20,18 @@ jobs:
           tar xzf sparkshell-src.tar.gz
           ls sparkshell
 
+      - name: Build Debian rootfs (arm64)
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq debootstrap
+          sudo rm -rf /tmp/db
+          sudo debootstrap --arch=arm64 --foreign --variant=minbase \
+            --include=apt,bash,coreutils,curl,ca-certificates,git,python3,less,nano,procps,psmisc,file \
+            bookworm /tmp/db http://deb.debian.org/debian 2>&1 | tail -5
+          sudo mkdir -p sparkshell/android/app/src/main/assets
+          sudo tar -czf sparkshell/android/app/src/main/assets/rootfs.tar.gz --numeric-owner -C /tmp/db .
+          ls -lh sparkshell/android/app/src/main/assets/rootfs.tar.gz
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -75,8 +87,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0-apk
-          name: SparkShell 1.1.0 (arm64, com.grokggg.sparkshell)
+          tag_name: v1.2.0-apk
+          name: SparkShell 1.2.0 (Debian proot + PTY/SSH/WebRTC)
           files: sparkshell/build/app/outputs/flutter-apk/app-release.apk
           body: |
             Flutter 3.50.0 + NDK 28.2 构建，仅 arm64-v8a，包名 com.grokggg.sparkshell，自签（sparkshell.jks）。
