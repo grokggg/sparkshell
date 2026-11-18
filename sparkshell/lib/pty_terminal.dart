@@ -12,7 +12,11 @@ class PtyTerminalPage extends StatefulWidget {
     super.key,
     this.title = '本地 PTY',
     this.commandProvider,
+    this.toolchainCommand,
   });
+
+  /// 一键把常用开发工具装上（Alpine 用 apk、Debian 用 apt），null 表示不显示按钮。
+  final String? toolchainCommand;
 
   /// 启动前解析出要执行的程序（默认 /system/bin/sh）。
   /// 返回 null 表示准备失败。
@@ -71,6 +75,19 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
     }
   }
 
+  bool _installing = false;
+
+  /// 一键装 python3/git/curl/vim：直接打进当前 PTY，用户在终端里能看到进度。
+  Future<void> _installToolchain() async {
+    final cmd = widget.toolchainCommand;
+    if (cmd == null || _fd < 0) return;
+    setState(() => _installing = true);
+    await _send('$cmd\r');
+    // apk/apt 是同步阻塞的，等提示符回来就当作结束；这里只做按钮防抖。
+    await Future.delayed(const Duration(seconds: 25));
+    if (mounted) setState(() => _installing = false);
+  }
+
   /// 中文输入法常把回车吃掉（先确认候选词），所以按钮直发字节，绕开 IME。
   Future<void> _send(String seq) async {
     if (_fd < 0) return;
@@ -119,6 +136,15 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
                 child: Text(_status,
                     style: const TextStyle(fontSize: 12, color: Color(0xFF9AA7C7))),
               ),
+              if (widget.toolchainCommand != null && _fd >= 0) ...[
+                OutlinedButton.icon(
+                  onPressed: _installing ? null : _installToolchain,
+                  icon: const Icon(Icons.build_outlined, size: 16),
+                  label: Text(_installing ? '装工具链…' : '装工具链',
+                      style: const TextStyle(fontSize: 12)),
+                ),
+                const SizedBox(width: 8),
+              ],
               FilledButton.tonal(
                 onPressed: _fd >= 0 ? null : _start,
                 child: const Text('启动 PTY'),

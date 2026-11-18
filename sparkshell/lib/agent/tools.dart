@@ -153,7 +153,7 @@ class Tools {
   static Future<String> _bash(Map<String, dynamic> a) async {
     final cmd = (a['command'] as String? ?? '').trim();
     if (cmd.isEmpty) return '缺少 command';
-    final secs = ((a['timeout'] as num?)?.toInt() ?? 60).clamp(5, 300);
+    final secs = ((a['timeout'] as num?)?.toInt() ?? 120).clamp(5, 600);
     final r = await LinuxEnv.instance
         .execShell(cmd)
         .timeout(Duration(seconds: secs), onTimeout: () => ProcessResult(0, 124, '', '超时 ${secs}s'));

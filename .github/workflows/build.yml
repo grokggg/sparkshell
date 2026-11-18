@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.9.0-apk
-          name: SparkShell 1.9.0 (diff 着色 + 步数放宽到 12)
+          tag_name: v1.9.1-apk
+          name: SparkShell 1.9.1 (一键装工具链 + Agent 环境常识)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.9.1**
+            - Linux 页新增「装工具链」按钮：python3 / pip / git / curl / vim / nano 一条命令装齐（Alpine 走 apk、Debian 走 apt）
+            - Agent 的 system prompt 补上环境事实：python3 默认不存在，跑脚本前先 `command -v python3 || apk add`，一步到位
+            - bash 工具超时默认 60→120 秒、上限 300→600 秒，装大包不再半路被砍
+            - 提示改写文件优先 edit_file，减少整文件覆盖
+
             **1.9.0**
             - 工具结果里的 diff 按行着色：`+` 绿、`-` 红、`@@` 蓝，改了哪几行一眼看到
             - `write_file` / `edit_file` 自动产出 diff，不用再手动 cat 对比

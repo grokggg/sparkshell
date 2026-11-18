@@ -11,6 +11,8 @@ class LinuxPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return PtyTerminalPage(
       title: 'Debian Linux',
+      toolchainCommand: 'command -v apk >/dev/null && apk add --no-cache python3 py3-pip git curl vim nano '
+          '|| (apt-get update && apt-get install -y python3 python3-pip git curl vim nano)',
       commandProvider: (log) async {
         try {
           return await LinuxEnv.instance.ensureReady(log);

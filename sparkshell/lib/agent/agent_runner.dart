@@ -27,11 +27,15 @@ class AgentRunner {
 
   /// 容器事实写进 system：不写这段，模型会满世界找 python3、把步数烧在探测上。
   static const preamble = '你在一台 Android 手机的 proot 容器里，rootfs 为 Alpine 或 Debian，'
-      '工作目录 /root，PATH 已配好。\n'
-      '工具：bash（容器内 shell）、read_file、write_file、list_dir。\n'
-      'Alpine 只有 busybox：缺什么先装——apk add --no-cache python3 git curl；'
-      'Debian 用 apt-get update && apt-get install -y。\n'
-      '先探测再动手：cat /etc/os-release、command -v python3。命令保持短，一次一件事。';
+      '工作目录 /root，PATH 已配好（/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin）。\n'
+      '工具：bash（容器内 shell，每次独立进程，用 cd /root && ... 串联）、read_file、write_file、'
+      'list_dir、edit_file（按上下文替换）、search_files、todo。\n'
+      '环境事实：Alpine 只有 busybox，python3/git/curl 默认都不存在。\n'
+      '跑 python 前先 self-heal，一步到位，别分三步：'
+      '`command -v python3 >/dev/null || apk add --no-cache python3; cd /root && python3 xxx.py`。'
+      'Debian 用 `command -v python3 >/dev/null || (apt-get update && apt-get install -y python3)`。\n'
+      'apk/apt 源已在 App 侧换成国内镜像，装包通常几十秒；超过 2 分钟没输出就先换策略。\n'
+      '改写文件优先 edit_file（只传 old/new 片段），整文件覆盖才用 write_file。';
 
   Future<void> run(List<Map<String, dynamic>> messages) async {
     if (messages.isEmpty || messages.first['role'] != 'system') {
