@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.6.0-apk
-          name: SparkShell 1.6.0 (文件浏览器：看/改/导入)
+          tag_name: v1.6.1-apk
+          name: SparkShell 1.6.1 (文件页自愈：/root 未就绪自动重试 + 诊断)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+        **1.6.1 修复真机「目录不存在: /root」**
+        - 首次解包还没跑到 /root 时自动等待重试（最多 8 次 × 4 秒），不再直接报错
+        - 报错页显示真实 rootPath 与 rootfs 前 12 项，一眼定位
+        - 新增「建出来再读」按钮
+        - 兜底：/root 真不存在时自动切到根目录
+
             两个包，装哪个都行：
             - `app-alpine.apk`（约 60 MB）：Alpine rootfs，验证链路用，缺什么用 `apk add` 现装
             - `app-debian.apk`（约 177 MB）：Debian bookworm + apt/python3/git，开箱即用
