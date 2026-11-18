@@ -108,12 +108,16 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.7.1-apk
-          name: SparkShell 1.7.1 (新建文件不再把提示文字当文件名)
+          tag_name: v1.8.0-apk
+          name: SparkShell 1.8.0 (文件直接发进 Chat)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.8.0**
+            - 文件页长按 → 「发给 Agent」：路径直接落到 Chat 输入框（`@/root/hello.py`），自动切到 Chat 页
+            - 编辑保存时自动补结尾换行，`cat` 输出不再和提示符黏成一行
+
             **1.7.1**
             - 「新建文件」对话框的提示文字被当成了初始值，结果建出 `文件名（如 hello.py）` 这种鬼名字；现在只做提示、不预填
             - 文件名/文件夹名校验：空名、含斜杠、`.` / `..`、超长一律拦下

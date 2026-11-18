@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import 'app_bus.dart';
 import 'chat/chat_page.dart';
 import 'files/file_page.dart';
 import 'linux_env.dart';
@@ -43,10 +45,16 @@ class _HomeState extends State<Home> {
     const PtyTerminalPage(),
     const LinuxPage(),
     const ChatPage(),
-    _FilesTab(),
+    _FilesTab(onSendToChat: _sendToChat),
     const SshTerminalPage(),
     const WebRtcPage(),
   ];
+
+  /// 文件页长按「发给 Agent」：把路径交给 Chat，再切到 Chat 页。
+  void _sendToChat(String path) {
+    AppBus.pendingChatFile.value = path;
+    setState(() => _idx = 2);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -55,7 +63,7 @@ class _HomeState extends State<Home> {
         title: const Row(children: [
           Text('SparkShell'),
           SizedBox(width: 8),
-          Text('v1.7.1', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          Text('v1.8.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
         ]),
         centerTitle: false,
       ),
@@ -79,7 +87,9 @@ class _HomeState extends State<Home> {
 
 /// 文件 Tab 依赖 rootfs 的就绪路径，所以单独包一层：先 ensureReady，再交棒给 FilePage。
 class _FilesTab extends StatefulWidget {
-  const _FilesTab();
+  const _FilesTab({this.onSendToChat});
+
+  final void Function(String path)? onSendToChat;
 
   @override
   State<_FilesTab> createState() => _FilesTabState();
@@ -118,7 +128,9 @@ class _FilesTabState extends State<_FilesTab> {
 
   @override
   Widget build(BuildContext context) {
-    if (_root != null) return FilePage(rootPath: _root!);
+    if (_root != null) {
+      return FilePage(rootPath: _root!, onSendToChat: widget.onSendToChat);
+    }
     return Center(
       child: _err == null
           ? const CircularProgressIndicator(strokeWidth: 2)

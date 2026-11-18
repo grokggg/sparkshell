@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../agent/agent_runner.dart';
+import '../app_bus.dart';
 import '../linux_env.dart';
 import 'api_config.dart';
 import 'llm_client.dart';
@@ -60,7 +61,20 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    AppBus.pendingChatFile.addListener(_takePendingFile);
     _boot();
+  }
+
+  /// 文件页长按「发给 Agent」后，把 @路径 插到输入框末尾。
+  void _takePendingFile() {
+    final p = AppBus.pendingChatFile.value;
+    if (p == null) return;
+    AppBus.pendingChatFile.value = null;
+    final cur = _input.text;
+    final sep = (cur.isEmpty || cur.endsWith(' ')) ? '' : ' ';
+    _input.text = '$cur$sep@$p ';
+    _input.selection = TextSelection.collapsed(offset: _input.text.length);
+    if (mounted) setState(() {});
   }
 
   Future<void> _boot() async {
@@ -190,6 +204,7 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _sub?.cancel();
     _client?.dispose();
+    AppBus.pendingChatFile.removeListener(_takePendingFile);
     _input.dispose();
     _scroll.dispose();
     super.dispose();

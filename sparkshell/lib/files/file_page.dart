@@ -13,7 +13,15 @@ import 'fs_service.dart';
 /// rootPath 是宿主侧 rootfs 绝对路径（filesDir/rootfs），
 /// 容器路径 /root/x 与宿主一一对应，所以这里不做 proot 转发。
 class FilePage extends StatefulWidget {
-  const FilePage({super.key, required this.rootPath, this.startPath = '/root'});
+  const FilePage({
+    super.key,
+    required this.rootPath,
+    this.startPath = '/root',
+    this.onSendToChat,
+  });
+
+  /// 把文件路径发给 Chat（在输入框里变成 @路径 引用）。
+  final void Function(String path)? onSendToChat;
 
   final String rootPath;
   final String startPath;
@@ -276,6 +284,13 @@ class _FilePageState extends State<FilePage> {
             title: const Text('复制路径'),
             onTap: () => Navigator.pop(context, 'copy'),
           ),
+          if (widget.onSendToChat != null)
+            ListTile(
+              leading: const Icon(Icons.chat_bubble_outline),
+              title: const Text('发给 Agent'),
+              subtitle: Text(e.isDir ? '把目录路径放进 Chat 输入框' : '把文件路径放进 Chat 输入框'),
+              onTap: () => Navigator.pop(context, 'chat'),
+            ),
         ]),
       ),
     );
@@ -319,6 +334,10 @@ class _FilePageState extends State<FilePage> {
       case 'copy':
         await Clipboard.setData(ClipboardData(text: e.path));
         _toast('已复制 ${e.path}');
+        break;
+      case 'chat':
+        widget.onSendToChat!(e.path);
+        _toast('已放进 Chat 输入框：${e.path}');
         break;
     }
   }
@@ -525,7 +544,10 @@ class _EditorPageState extends State<EditorPage> {
 
   Future<void> _save() async {
     try {
-      await widget.fs.writeText(widget.path, _ctrl.text);
+      // 末尾没有换行的文本，cat 之后提示符会黏在内容后面，补一个。
+      var body = _ctrl.text;
+      if (body.isNotEmpty && !body.endsWith('\n')) body = '$body\n';
+      await widget.fs.writeText(widget.path, body);
       if (!mounted) return;
       setState(() => _dirty = false);
       ScaffoldMessenger.of(context)
