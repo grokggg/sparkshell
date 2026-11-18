@@ -458,6 +458,25 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// 工具结果里带 diff（@@ / + / -）时，按行上色，改了什么一眼看得见。
+  static TextSpan _toolSpan(String text) {
+    final spans = <TextSpan>[];
+    final lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      final l = lines[i];
+      Color? color;
+      if (l.startsWith('@@')) {
+        color = const Color(0xFF7FB2F0);
+      } else if (l.startsWith('+')) {
+        color = const Color(0xFF6FCF97);
+      } else if (l.startsWith('-')) {
+        color = const Color(0xFFEB8A8A);
+      }
+      spans.add(TextSpan(text: i == lines.length - 1 ? l : '$l\n', style: TextStyle(color: color)));
+    }
+    return TextSpan(children: spans);
+  }
+
   @override
   Widget build(BuildContext context) {
     final cfg = _cfg;
@@ -517,14 +536,19 @@ class _ChatPageState extends State<ChatPage> {
                                   : Theme.of(context).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: SelectableText(
-                          m.text.isEmpty ? '…' : m.text,
-                          style: TextStyle(
-                            fontSize: m.role == 'tool' ? 11 : 13,
-                            height: 1.4,
-                            fontFamily: m.role == 'tool' ? 'monospace' : null,
-                          ),
-                        ),
+                        child: m.role == 'tool'
+                            ? SelectableText.rich(
+                                _toolSpan(m.text.isEmpty ? '…' : m.text),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  height: 1.4,
+                                  fontFamily: 'monospace',
+                                ),
+                              )
+                            : SelectableText(
+                                m.text.isEmpty ? '…' : m.text,
+                                style: const TextStyle(fontSize: 13, height: 1.4),
+                              ),
                       ),
                     );
                   },

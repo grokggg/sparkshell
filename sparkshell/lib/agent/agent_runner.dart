@@ -16,7 +16,7 @@ class AgentRunner {
     required this.onText,
     required this.onToolResult,
     required this.approve,
-    this.maxSteps = 6,
+    this.maxSteps = 12,
   });
 
   final ApiConfig cfg;
@@ -67,7 +67,7 @@ class AgentRunner {
           messages.add({'role': 'tool', 'tool_call_id': c['id'], 'content': out});
         }
       }
-      onText('（已连跑 $maxSteps 步，先停下——继续发消息我接着做）');
+      onText('（已连跑 $maxSteps 步，先停下。发「继续」我接着跑，已完成的步骤不会重来）');
     } finally {
       client.dispose();
     }

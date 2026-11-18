@@ -176,9 +176,17 @@ class Tools {
     final f = _resolve(a['path'] as String?);
     if (f == null) return '路径非法';
     await f.parent.create(recursive: true);
-    await f.writeAsString(a['content'] as String? ?? '', flush: true);
+    final body = a['content'] as String? ?? '';
+    var before = '';
+    if (await f.exists()) {
+      try {
+        before = await f.readAsString();
+      } catch (_) {}
+    }
+    await f.writeAsString(body, flush: true);
     final n = await f.length();
-    return '已写入 ${f.path}，$n 字节';
+    final d = _diffText(before, body);
+    return '已写入 ${f.path}，$n 字节${d.isEmpty ? '' : '\n$d'}';
   }
 
   static Future<String> _list(Map<String, dynamic> a) async {
@@ -220,7 +228,65 @@ class Tools {
     }
     final out = all ? text.replaceAll(oldS, newS) : text.replaceFirst(oldS, newS);
     await f.writeAsString(out, flush: true);
-    return '已替换 ${all ? hits : 1} 处，文件现 ${out.length} 字符';
+    final d = _diffText(text, out);
+    return '已替换 ${all ? hits : 1} 处，文件现 ${out.length} 字符${d.isEmpty ? '' : '\n$d'}';
+  }
+
+  /// 极简行级 diff（LCS）：给 Chat 的 diff 卡片用，最多 80 行。
+  static String _diffText(String before, String after) {
+    if (before == after) return '';
+    final a = before.split('\n');
+    final b = after.split('\n');
+    var start = 0;
+    while (start < a.length && start < b.length && a[start] == b[start]) {
+      start++;
+    }
+    var endA = a.length;
+    var endB = b.length;
+    while (endA > start && endB > start && a[endA - 1] == b[endB - 1]) {
+      endA--;
+      endB--;
+    }
+    final midA = a.sublist(start, endA);
+    final midB = b.sublist(start, endB);
+    final out = <String>['@@ -${start + 1},${midA.length} +${start + 1},${midB.length} @@'];
+    final n = midA.length;
+    final m = midB.length;
+    if (n * m > 40000) {
+      out.addAll(midA.map((l) => '-$l'));
+      out.addAll(midB.map((l) => '+$l'));
+      return out.take(80).join('\n');
+    }
+    final dp = List.generate(n + 1, (_) => List<int>.filled(m + 1, 0));
+    for (var i = n - 1; i >= 0; i--) {
+      for (var j = m - 1; j >= 0; j--) {
+        dp[i][j] = midA[i] == midB[j]
+            ? dp[i + 1][j + 1] + 1
+            : (dp[i + 1][j] >= dp[i][j + 1] ? dp[i + 1][j] : dp[i][j + 1]);
+      }
+    }
+    var i = 0;
+    var j = 0;
+    while (i < n && j < m) {
+      if (midA[i] == midB[j]) {
+        out.add(' ${midA[i]}');
+        i++;
+        j++;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        out.add('-${midA[i]}');
+        i++;
+      } else {
+        out.add('+${midB[j]}');
+        j++;
+      }
+    }
+    while (i < n) {
+      out.add('-${midA[i++]}');
+    }
+    while (j < m) {
+      out.add('+${midB[j++]}');
+    }
+    return out.take(80).join('\n');
   }
 
   static const _skipDirs = {'.git', 'node_modules', '.dart_tool', 'build', '__pycache__', '.cache'};

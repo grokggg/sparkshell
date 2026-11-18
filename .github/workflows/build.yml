@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.8.0-apk
-          name: SparkShell 1.8.0 (文件直接发进 Chat)
+          tag_name: v1.9.0-apk
+          name: SparkShell 1.9.0 (diff 着色 + 步数放宽到 12)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.9.0**
+            - 工具结果里的 diff 按行着色：`+` 绿、`-` 红、`@@` 蓝，改了哪几行一眼看到
+            - `write_file` / `edit_file` 自动产出 diff，不用再手动 cat 对比
+            - Agent 单轮步数 6 → 12：像"装 python3 + 跑脚本"这种链路不会再半路停
+            - 暂停提示改成"发「继续」我接着跑"，已完成的步骤不会重来
+
             **1.8.0**
             - 文件页长按 → 「发给 Agent」：路径直接落到 Chat 输入框（`@/root/hello.py`），自动切到 Chat 页
             - 编辑保存时自动补结尾换行，`cat` 输出不再和提示符黏成一行
