@@ -41,7 +41,8 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   int _idx = 0;
 
-  final _pages = <Widget>[
+  // late final：初始化时机在构造之后，才能引用实例方法 _sendToChat
+  late final _pages = <Widget>[
     const PtyTerminalPage(),
     const LinuxPage(),
     const ChatPage(),
