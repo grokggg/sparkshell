@@ -200,6 +200,29 @@ class _FilePageState extends State<FilePage> {
     }
   }
 
+  /// 新建空文件并直接进编辑器。之前只能用"新建文件夹"，于是 hello.py 变成了目录。
+  Future<void> _newFile() async {
+    final name = await _ask('新建文件', '文件名（如 hello.py）');
+    if (name == null || name.trim().isEmpty) return;
+    final path = '$_path/$name'.replaceAll('//', '/');
+    try {
+      final exists = await _fs.exists(path);
+      if (exists) {
+        _toast('已存在同名文件/目录');
+        return;
+      }
+      await _fs.writeText(path, '');
+      await _load();
+      if (!mounted) return;
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => EditorPage(fs: _fs, path: path),
+      ));
+      _load();
+    } catch (e) {
+      _toast('创建失败：$e');
+    }
+  }
+
   Future<void> _newFolder() async {
     final name = await _ask('新建文件夹', '文件夹名');
     if (name == null || name.trim().isEmpty) return;
@@ -323,6 +346,7 @@ class _FilePageState extends State<FilePage> {
             icon: const Icon(Icons.arrow_upward),
           ),
           IconButton(tooltip: '刷新', onPressed: _load, icon: const Icon(Icons.refresh)),
+          IconButton(tooltip: '新建文件', onPressed: _newFile, icon: const Icon(Icons.note_add_outlined)),
           IconButton(tooltip: '新建文件夹', onPressed: _newFolder, icon: const Icon(Icons.create_new_folder_outlined)),
           IconButton(tooltip: '导入手机文件', onPressed: _import, icon: const Icon(Icons.upload_file)),
         ],

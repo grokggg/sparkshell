@@ -88,6 +88,7 @@ class LinuxEnv {
       await marker.writeAsString(DateTime.now().toIso8601String());
     }
 
+    await _writeMirrors(rootfs.path);
     await _writeResolvConf(rootfs.path); // 每次启动都刷，防止被镜像里的空文件覆盖
     final script = await _launchScript(files, rootfs.path, tmp.path);
     _rootfs = rootfs.path;
@@ -132,6 +133,27 @@ class LinuxEnv {
         'PATH': '/system/bin:/system/xbin',
       },
     );
+  }
+
+  /// 把包管理器源换到国内镜像：alpine 默认走海外 CDN，真机上 apk add 常超时。
+  Future<void> _writeMirrors(String rootfs) async {
+    const hosts = {
+      'dl-cdn.alpinelinux.org': 'mirrors.aliyun.com',
+      'deb.debian.org': 'mirrors.aliyun.com',
+      'security.debian.org': 'mirrors.aliyun.com',
+    };
+    for (final rel in ['etc/apk/repositories', 'etc/apt/sources.list']) {
+      try {
+        final f = File('$rootfs/$rel');
+        if (!await f.exists()) continue;
+        var text = await f.readAsString();
+        final before = text;
+        hosts.forEach((k, v) {
+          text = text.replaceAll(k, v);
+        });
+        if (text != before) await f.writeAsString(text, flush: true);
+      } catch (_) {}
+    }
   }
 
   Future<void> _writeResolvConf(String rootfs) async {

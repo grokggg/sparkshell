@@ -55,7 +55,7 @@ class _HomeState extends State<Home> {
         title: const Row(children: [
           Text('SparkShell'),
           SizedBox(width: 8),
-          Text('v1.6.6', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          Text('v1.7.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
         ]),
         centerTitle: false,
       ),

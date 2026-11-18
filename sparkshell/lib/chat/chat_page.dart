@@ -43,6 +43,20 @@ class _ChatPageState extends State<ChatPage> {
   bool _autoApprove = false;
   String? _err;
 
+  /// 把 HTTP 错误翻译成人话：免费模型 429 不是崩溃，是额度/限流。
+  String _friendly(Object e) {
+    final t = '$e';
+    if (t.contains('429')) {
+      if (t.contains('free')) {
+        return '免费模型额度用完了（429）。去右上角设置换一个模型，或等 1 分钟再发。';
+      }
+      return '请求太频繁被限流（429），等几十秒再试。';
+    }
+    if (t.contains('401')) return 'API Key 无效或过期（401），去设置里重新填。';
+    if (t.contains('SocketException') || t.contains('timeout')) return '网络连不上模型服务，检查网络或换个接入点。';
+    return t;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -227,7 +241,7 @@ class _ChatPageState extends State<ChatPage> {
         _toBottom();
       },
       onError: (Object e) {
-        setState(() => _err = '$e');
+        setState(() => _err = _friendly(e));
         if (!done.isCompleted) done.complete();
       },
       onDone: () {
@@ -286,7 +300,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       await runner.run(history);
     } catch (e) {
-      if (mounted) setState(() => _err = '$e');
+      if (mounted) setState(() => _err = _friendly(e));
     } finally {
       if (mounted) setState(() => _busy = false);
       await _persist();

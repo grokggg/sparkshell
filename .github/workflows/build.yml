@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.6.6-apk
-          name: SparkShell 1.6.6 (源码进仓库：以后改哪编哪)
+          tag_name: v1.7.0-apk
+          name: SparkShell 1.7.0 (回车键修好 + 新建文件 + 国内镜像源)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.7.0**
+            - 终端快捷键条：⏎ 回车 / Tab / Ctrl-C / Ctrl-D / 清屏 —— 中文输入法吃掉回车也能执行命令
+            - 文件页新增「新建文件」，直接进编辑器（之前只有新建文件夹，`hello.py` 会变成目录）
+            - Alpine/Debian 包源自动切阿里云镜像，`apk add` 不再 180s 超时
+            - Chat 报错说人话：429 免费额度、401 Key 失效、网络不通分开提示
+
             **1.6.6 —— 构建流程修正**
             - 源码直接放在 `sparkshell/` 目录并由构建直接读取，不再依赖 `sparkshell-src.tar.gz`
             - 改哪个文件、发哪一版，一一对应

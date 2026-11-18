@@ -71,6 +71,15 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
     }
   }
 
+  /// 中文输入法常把回车吃掉（先确认候选词），所以按钮直发字节，绕开 IME。
+  Future<void> _send(String seq) async {
+    if (_fd < 0) return;
+    try {
+      await _ch.invokeMethod('write',
+          {'fd': _fd, 'data': Uint8List.fromList(utf8.encode(seq))});
+    } catch (_) {}
+  }
+
   Future<void> _drain() async {
     if (_fd < 0) return;
     try {
@@ -79,6 +88,21 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
         _term.write(utf8.decode(res, allowMalformed: true));
       }
     } catch (_) {}
+  }
+
+  Widget _key(String label, String seq) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: OutlinedButton(
+        onPressed: _fd < 0 ? null : () => _send(seq),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          minimumSize: const Size(0, 34),
+          visualDensity: VisualDensity.compact,
+        ),
+        child: Text(label, style: const TextStyle(fontSize: 12)),
+      ),
+    );
   }
 
   @override
@@ -101,6 +125,17 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
               ),
             ],
           ),
+        ),
+        Container(
+          color: const Color(0xFF0B1220),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(children: [
+            _key('⏎ 回车', '\r'),
+            _key('Tab', '\t'),
+            _key('Ctrl-C', '\x03'),
+            _key('Ctrl-D', '\x04'),
+            _key('清屏', '\x0c'),
+          ]),
         ),
         Expanded(
           child: TerminalView(
