@@ -108,12 +108,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.6.2-apk
-          name: SparkShell 1.6.2 (修复根因：文件页拿错 rootfs 路径)
+          tag_name: v1.6.3-apk
+          name: SparkShell 1.6.3 (版本号可见 + 路径自动纠正)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.6.3**
+            - 标题栏显示版本号（v1.6.3），装没装上一眼可辨
+            - 文件页路径自动纠正：向上找同级 `rootfs/`，就算传进来的是 start.sh 也能自己认回去
+            - 诊断框显示真正在用的 rootPath
+
             **1.6.2 修复根因：文件页拿到的是 proot 启动脚本路径，不是 rootfs**
             - 之前文件页的 rootPath = `files/proot/start.sh`（ensureReady 的返回值是脚本路径），所以永远「目录不存在」、上传也落不下去
             - 现在明确取 `LinuxEnv.rootfsPath`，并且构造时先校验是不是真实目录

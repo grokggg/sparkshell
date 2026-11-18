@@ -23,7 +23,8 @@ class FilePage extends StatefulWidget {
 }
 
 class _FilePageState extends State<FilePage> {
-  late final FsService _fs = FsService(widget.rootPath);
+  late String _rootPath;
+  late FsService _fs;
   late String _path = widget.startPath;
   List<FsEntry> _items = const [];
   bool _loading = true;
@@ -35,15 +36,29 @@ class _FilePageState extends State<FilePage> {
   @override
   void initState() {
     super.initState();
-    // rootPath 必须是真实存在的目录；传进来个文件（历史 bug 会把 start.sh 当 rootfs）
-    // 时直接说清楚，别让用户看到"目录不存在: /"这种没头没脑的报错。
-    final dir = Directory(widget.rootPath);
-    if (!dir.existsSync()) {
+    _rootPath = _resolveRoot(widget.rootPath);
+    _fs = FsService(_rootPath);
+    if (!Directory(_rootPath).existsSync()) {
       _loading = false;
-      _err = 'rootfs 路径不可用：${widget.rootPath}\n（不是目录或尚未解包）';
+      _err = 'rootfs 路径不可用：${widget.rootPath}';
     } else {
       _load();
     }
+  }
+
+  /// 传进来的必须是 rootfs 根目录。历史 bug 会把 proot 的 start.sh 当根目录传进来，
+  /// 这种情况下往上找几层，把同级的 rootfs/ 认回来，别让用户对着报错页干瞪眼。
+  static String _resolveRoot(String p) {
+    if (Directory(p).existsSync()) return p;
+    var dir = File(p).parent;
+    for (var i = 0; i < 4; i++) {
+      final cand = Directory('${dir.path}/rootfs');
+      if (cand.existsSync()) return cand.path;
+      final up = dir.parent;
+      if (up.path == dir.path) break;
+      dir = up;
+    }
+    return p;
   }
 
   Future<void> _load() async {
@@ -55,7 +70,7 @@ class _FilePageState extends State<FilePage> {
       // rootfs 里没有 /root 时别把用户卡死在报错页，直接退到根目录
       if (_path == '/root' && !await Directory(_fs.toHost('/root')).exists()) {
         // 首次解包还没跑到 /root 时，等一下再来，别急着报"目录不存在"
-        final marker = File('${widget.rootPath}/.sparkshell_ready');
+        final marker = File('$_rootPath/.sparkshell_ready');
         if (!await marker.exists() && _autoRetry < 8) {
           _autoRetry++;
           if (mounted) {
@@ -97,7 +112,7 @@ class _FilePageState extends State<FilePage> {
 
   /// 出错时把"我到底在看哪个目录"摆出来，真机截图就能定位。
   Future<String> _diagnose() async {
-    final root = widget.rootPath;
+    final root = _rootPath;
     final host = '${root.endsWith('/') ? root.substring(0, root.length - 1) : root}'
         '${_path == '/' ? '' : _path}';
     final sb = StringBuffer('rootPath = $root\n目标宿主路径 = $host\n');
@@ -460,7 +475,7 @@ class _EditorPageState extends State<EditorPage> {
 
   /// 出错时把"我到底在看哪个目录"摆出来，真机截图就能定位。
   Future<String> _diagnose() async {
-    final root = widget.rootPath;
+    final root = _rootPath;
     final host = '${root.endsWith('/') ? root.substring(0, root.length - 1) : root}'
         '${_path == '/' ? '' : _path}';
     final sb = StringBuffer('rootPath = $root\n目标宿主路径 = $host\n');

@@ -52,7 +52,11 @@ class _HomeState extends State<Home> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SparkShell · linux/chat/files/ssh/webrtc'),
+        title: const Row(children: [
+          Text('SparkShell'),
+          SizedBox(width: 8),
+          Text('v1.6.3', style: TextStyle(fontSize: 12, color: Colors.white70)),
+        ]),
         centerTitle: false,
       ),
       body: IndexedStack(index: _idx, children: _pages),
