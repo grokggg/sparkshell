@@ -108,8 +108,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.0-apk
-          name: SparkShell 1.4.0 (proot Linux + Chat + Agent 工具循环)
+          tag_name: v1.4.1-apk
+          name: SparkShell 1.4.1 (Agent 工具循环 · PATH 修复)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
@@ -122,4 +122,7 @@ jobs:
             Chat 页：OpenAI 兼容（DeepSeek/通义/Kimi/Ollama），SSE 流式，Key 存应用私有目录。
             Agent 模式（Chat 右上角机器人图标）：模型可调用 bash / read_file / write_file / list_dir，
             全部在 proot 容器内执行，每次调用先弹窗审批（可「全部允许」），最多连跑 6 步。
+
+            1.4.1 修复：工具命令没带 PATH，guest 里继承到宿主的 /system/bin，导致 ls/apk/python3 全 not found。
+            现在每条命令都显式 export PATH=/usr/local/sbin:...:/bin，并把容器事实写进 system 提示。
             修复：rootfs 解包不再以 tar 退出码判定（chown/mknod 必报错但文件完整），改校验关键路径，并把 tar 输出显示到界面上。
