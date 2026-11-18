@@ -1,0 +1,63 @@
+plugins {
+    id "com.android.application"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.xinghuo.sparkshell"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = "27.2.12479018"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    signingConfigs {
+        release {
+            storeFile = file("../keystore/sparkshell.jks")
+            storePassword = "sparkshell"
+            keyAlias = "sparkshell"
+            keyPassword = "sparkshell"
+        }
+    }
+
+    defaultConfig {
+        // 必须与 assets/proot 里 patch 进去的 loader 绝对路径一致：
+    // /data/data/com.grokggg.sparkshell/files/proot/loader
+    applicationId = "com.grokggg.sparkshell"
+        minSdk = flutter.minSdkVersion
+        targetSdk = 28  // W^X：targetSdk>=29 时禁止在私有目录 exec（proot 需要）
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    lint {
+        // targetSdk 28 是 W^X 的硬要求，Google Play 的过期告警当错误会中断构建
+        abortOnError = false
+        checkReleaseBuilds = false
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.release
+            minifyEnabled false
+            shrinkResources false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
