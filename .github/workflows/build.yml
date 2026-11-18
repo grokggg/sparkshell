@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.9.2-apk
-          name: SparkShell 1.9.2 (网关 5xx 自动重试 + 一键重试)
+          tag_name: v1.10.0-apk
+          name: SparkShell 1.10.0 (多接入点自动故障转移)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.10.0**
+            - 多接入点：设置里可填最多若干备用 `baseUrl|key|model`，主接入点 5xx/连不上时自动切过去
+            - 切换后能通就留在那个接入点（并把配置写回本地），下次启动不用再试坏的那个
+            - 每个接入点先快速重试 1 次再轮换，全部失败才报错，错误里写明是哪个站点挂了
+            - 流式、非流式、测试连接三条路径共用同一套轮换逻辑
+
             **1.9.2**
             - 模型网关 5xx / 429 / 连接超时：自动重试 3 次（退避 0.8s / 3.2s / 7.2s），抖动不再直接摊到界面上
             - 522 / 523 / 524 单独给白话解释："中转站源站没响应，不是你的手机问题"

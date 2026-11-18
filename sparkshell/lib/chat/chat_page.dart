@@ -369,6 +369,11 @@ class _ChatPageState extends State<ChatPage> {
     final key = TextEditingController(text: cfg.apiKey);
     final model = TextEditingController(text: cfg.model);
     final sys = TextEditingController(text: cfg.systemPrompt);
+    final bak = TextEditingController(
+      text: cfg.backups
+          .map((e) => '${e['baseUrl']}|${e['apiKey']}|${e['model']}')
+          .join('\n'),
+    );
     var temp = cfg.temperature;
     String? test;
 
@@ -396,6 +401,15 @@ class _ChatPageState extends State<ChatPage> {
                 decoration: const InputDecoration(
                   labelText: '模型',
                   hintText: 'deepseek-chat / qwen-plus / gpt-4o-mini',
+                ),
+              ),
+              TextField(
+                controller: bak,
+                maxLines: 3,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  labelText: '备用接入点（可选）',
+                  hintText: 'https://备份站/v1|sk-xxx|模型名\n一行一个；主接入点 5xx 时自动切过去',
                 ),
               ),
               TextField(
@@ -455,6 +469,21 @@ class _ChatPageState extends State<ChatPage> {
                   ..model = model.text.trim()
                   ..systemPrompt = sys.text
                   ..temperature = temp;
+                // 备用接入点：一行 `baseUrl|key|model`，空行忽略
+                cfg.backups
+                  ..clear()
+                  ..addAll(bak.text
+                      .split('\n')
+                      .map((l) => l.trim())
+                      .where((l) => l.isNotEmpty && l.contains('|'))
+                      .map((l) {
+                    final p = l.split('|');
+                    return {
+                      'baseUrl': p.isNotEmpty ? p[0].trim() : '',
+                      'apiKey': p.length > 1 ? p[1].trim() : '',
+                      'model': p.length > 2 ? p[2].trim() : cfg.model,
+                    };
+                  }));
                 if (_filesDir != null) await cfg.save(_filesDir!);
                 _client?.dispose();
                 _client = null;
