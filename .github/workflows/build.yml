@@ -108,8 +108,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.5.0-apk
-          name: SparkShell 1.5.0 (会话持久化 + 7 个工具)
+          tag_name: v1.6.0-apk
+          name: SparkShell 1.6.0 (文件浏览器：看/改/导入)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
@@ -119,6 +119,12 @@ jobs:
             - `app-debian.apk`（约 177 MB）：Debian bookworm + apt/python3/git，开箱即用
 
             包名 com.grokggg.sparkshell，arm64-v8a，自签证书。
+
+            1.6.0
+            - 新增「文件」页：浏览容器任意目录、面屑跳转、长按重命名/删除/复制路径、新建文件夹
+            - 点文本文件直接编辑并保存（300KB 上限，超限提示）；二进制文件给明确提示，不白屏
+            - 右上角上传：系统文件选择器多选，直接复制进当前容器目录（/root/import 或指定目录）
+            - 长按可导出到系统分享
 
             1.5.0
             - 会话持久化：Chat 左侧抽屉多会话，新建/切换/删除，每条消息落盘，退出不丢
