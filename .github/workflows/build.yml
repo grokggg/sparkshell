@@ -108,8 +108,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.4-apk
-          name: SparkShell 1.2.4 (Debian/Alpine proot)
+          tag_name: v1.3.0-apk
+          name: SparkShell 1.3.0 (proot Linux + Chat)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
@@ -119,4 +119,5 @@ jobs:
             - `app-debian.apk`（约 147 MB）：Debian bookworm + apt/python3/git，完整功能
 
             包名 com.grokggg.sparkshell，arm64-v8a，自签证书。
+            新增 Chat 页：OpenAI 兼容（DeepSeek/通义/Kimi/Ollama），SSE 流式，Key 存应用私有目录。
             修复：rootfs 解包不再以 tar 退出码判定（chown/mknod 必报错但文件完整），改校验关键路径，并把 tar 输出显示到界面上。
