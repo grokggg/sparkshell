@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.6.4-apk
-          name: SparkShell 1.6.4 (versionCode=10，能覆盖旧版安装)
+          tag_name: v1.6.5-apk
+          name: SparkShell 1.6.5 (源码包终于更新：文件页修复真正进包)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.6.5 —— 重要：之前 1.6.1~1.6.4 的修复根本没进包**
+            - 构建用的是仓库里的 `sparkshell-src.tar.gz`，不是工作区；这个包一直是 1.6.0 的文件
+            - 所以「取错 rootfs 路径」的 bug 一直存在，中间几个版本只是换了版本号
+            - 本次已重新打包源码（含 rootfsPath 修复、路径自动纠正、版本号 v1.6.5）
+            - versionName=1.6.5、versionCode=11
+
             **1.6.4**
             - 之前所有包的 versionCode 都是 1、versionName 全是 1.0.0，系统安装器可能直接跳过覆盖安装（这很可能就是你装了还是旧界面的原因）
             - 现在 versionName=1.6.4、versionCode=10，往后每版都递增
