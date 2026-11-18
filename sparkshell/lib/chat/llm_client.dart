@@ -46,7 +46,7 @@ class LlmClient {
       ],
     });
 
-    HttpResponse? resp;
+    HttpClientResponse? resp;
     for (var attempt = 1;; attempt++) {
       try {
         final req = await client.postUrl(uri);
@@ -72,7 +72,7 @@ class LlmClient {
       }
     }
 
-    await for (final line in resp
+    await for (final line in resp!
         .transform(utf8.decoder)
         .transform(const LineSplitter())) {
       if (!line.startsWith('data:')) continue;
@@ -106,7 +106,7 @@ class LlmClient {
       if (tools != null && tools.isNotEmpty) 'tools': tools,
       if (tools != null && tools.isNotEmpty) 'tool_choice': 'auto',
     });
-    HttpResponse resp;
+    HttpClientResponse resp;
     String text;
     for (var attempt = 1;; attempt++) {
       try {
