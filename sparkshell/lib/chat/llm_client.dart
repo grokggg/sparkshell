@@ -11,6 +11,25 @@ class LlmClient {
   final ApiConfig cfg;
   HttpClient? _http;
 
+  /// 网关抖动（5xx / 429 / 连接超时）自动重试，退避 1s、3s、7s。
+  static const _maxTries = 3;
+  static bool _retryable(int code) => code == 408 || code == 429 || code >= 500;
+
+  static String _why(int code) {
+    switch (code) {
+      case 522:
+      case 523:
+      case 524:
+        return '接入点网关超时（$code）：中转服务的源站没响应，不是你的手机问题';
+      case 502:
+      case 503:
+      case 504:
+        return '接入点暂时不可用（$code）';
+      default:
+        return 'HTTP $code';
+    }
+  }
+
   Stream<String> chat(List<Map<String, String>> messages) async* {
     final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     final uri = Uri.parse('$base/chat/completions');
@@ -27,16 +46,30 @@ class LlmClient {
       ],
     });
 
-    final req = await client.postUrl(uri);
-    req.headers.set('Content-Type', 'application/json');
-    req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
-    req.headers.set('Accept', 'text/event-stream');
-    req.add(utf8.encode(body));
-    final resp = await req.close();
-
-    if (resp.statusCode != 200) {
-      final err = await resp.transform(utf8.decoder).join();
-      throw HttpException('HTTP ${resp.statusCode}: ${err.length > 300 ? err.substring(0, 300) : err}');
+    HttpResponse? resp;
+    for (var attempt = 1;; attempt++) {
+      try {
+        final req = await client.postUrl(uri);
+        req.headers.set('Content-Type', 'application/json');
+        req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
+        req.headers.set('Accept', 'text/event-stream');
+        req.add(utf8.encode(body));
+        resp = await req.close();
+        if (resp.statusCode == 200) break;
+        final err = await resp.transform(utf8.decoder).join();
+        final short = err.length > 200 ? err.substring(0, 200) : err;
+        if (_retryable(resp.statusCode) && attempt < _maxTries) {
+          await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+          continue;
+        }
+        throw HttpException('${_why(resp.statusCode)}｜$short');
+      } on SocketException {
+        if (attempt >= _maxTries) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+      } on TimeoutException {
+        if (attempt >= _maxTries) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+      }
     }
 
     await for (final line in resp
@@ -65,22 +98,38 @@ class LlmClient {
   }) async {
     final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     final client = _http ??= HttpClient()..connectionTimeout = const Duration(seconds: 30);
-    final req = await client.postUrl(Uri.parse('$base/chat/completions'));
-    req.headers.set('Content-Type', 'application/json');
-    req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
-    req.add(utf8.encode(jsonEncode({
+    final payload = jsonEncode({
       'model': cfg.model,
       'messages': messages,
       'temperature': cfg.temperature,
       'stream': false,
       if (tools != null && tools.isNotEmpty) 'tools': tools,
       if (tools != null && tools.isNotEmpty) 'tool_choice': 'auto',
-    })));
-    final resp = await req.close();
-    final text = await resp.transform(utf8.decoder).join();
-    if (resp.statusCode != 200) {
-      throw HttpException(
-          'HTTP ${resp.statusCode}: ${text.length > 300 ? text.substring(0, 300) : text}');
+    });
+    HttpResponse resp;
+    String text;
+    for (var attempt = 1;; attempt++) {
+      try {
+        final req = await client.postUrl(Uri.parse('$base/chat/completions'));
+        req.headers.set('Content-Type', 'application/json');
+        req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
+        req.add(utf8.encode(payload));
+        resp = await req.close();
+        text = await resp.transform(utf8.decoder).join();
+        if (resp.statusCode == 200) break;
+        final short = text.length > 200 ? text.substring(0, 200) : text;
+        if (_retryable(resp.statusCode) && attempt < _maxTries) {
+          await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+          continue;
+        }
+        throw HttpException('${_why(resp.statusCode)}｜$short');
+      } on SocketException {
+        if (attempt >= _maxTries) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+      } on TimeoutException {
+        if (attempt >= _maxTries) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 800 * attempt * attempt));
+      }
     }
     final m = jsonDecode(text) as Map<String, dynamic>;
     final choices = m['choices'] as List?;

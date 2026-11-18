@@ -44,6 +44,9 @@ class _ChatPageState extends State<ChatPage> {
   bool _autoApprove = false;
   String? _err;
 
+  /// 上一条真正发出去的内容，失败后「重试」用它。
+  String? _lastTry;
+
   /// 把 HTTP 错误翻译成人话：免费模型 429 不是崩溃，是额度/限流。
   String _friendly(Object e) {
     final t = '$e';
@@ -54,6 +57,13 @@ class _ChatPageState extends State<ChatPage> {
       return '请求太频繁被限流（429），等几十秒再试。';
     }
     if (t.contains('401')) return 'API Key 无效或过期（401），去设置里重新填。';
+    if (t.contains('522') || t.contains('523') || t.contains('524')) {
+      return '接入点网关超时（$e）。已自动重试 3 次：中转站源站没响应，'
+          '换一个接入点或模型再发；点右边「重试」也可以。';
+    }
+    if (RegExp(r'HTTP 5\d\d').hasMatch(t)) {
+      return '模型服务端故障（$e），已自动重试 3 次。稍等一会儿或换模型。';
+    }
     if (t.contains('SocketException') || t.contains('timeout')) return '网络连不上模型服务，检查网络或换个接入点。';
     return t;
   }
@@ -228,6 +238,7 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     _input.clear();
+    _lastTry = text;
     if (_agent) {
       await _sendAgent(text, cfg);
       return;
@@ -500,8 +511,24 @@ class _ChatPageState extends State<ChatPage> {
           Container(
             width: double.infinity,
             color: Colors.red.withOpacity(0.15),
-            padding: const EdgeInsets.all(8),
-            child: Text(_err!, style: const TextStyle(fontSize: 12)),
+            padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(_err!, style: const TextStyle(fontSize: 12)),
+                ),
+                if (_lastTry != null)
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () {
+                            _input.text = _lastTry!;
+                            _send();
+                          },
+                    child: const Text('重试', style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
           ),
         Expanded(
           child: _msgs.isEmpty

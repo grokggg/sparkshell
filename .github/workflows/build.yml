@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.9.1-apk
-          name: SparkShell 1.9.1 (一键装工具链 + Agent 环境常识)
+          tag_name: v1.9.2-apk
+          name: SparkShell 1.9.2 (网关 5xx 自动重试 + 一键重试)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.9.2**
+            - 模型网关 5xx / 429 / 连接超时：自动重试 3 次（退避 0.8s / 3.2s / 7.2s），抖动不再直接摊到界面上
+            - 522 / 523 / 524 单独给白话解释："中转站源站没响应，不是你的手机问题"
+            - 错误条右侧加「重试」按钮，一键重发上一条，不用重新打字
+            - 流式和非流式（Agent 工具循环）两条通道都加了重试
+
             **1.9.1**
             - Linux 页新增「装工具链」按钮：python3 / pip / git / curl / vim / nano 一条命令装齐（Alpine 走 apk、Debian 走 apt）
             - Agent 的 system prompt 补上环境事实：python3 默认不存在，跑脚本前先 `command -v python3 || apk add`，一步到位
