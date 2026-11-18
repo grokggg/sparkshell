@@ -108,12 +108,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.7.0-apk
-          name: SparkShell 1.7.0 (回车键修好 + 新建文件 + 国内镜像源)
+          tag_name: v1.7.1-apk
+          name: SparkShell 1.7.1 (新建文件不再把提示文字当文件名)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **1.7.1**
+            - 「新建文件」对话框的提示文字被当成了初始值，结果建出 `文件名（如 hello.py）` 这种鬼名字；现在只做提示、不预填
+            - 文件名/文件夹名校验：空名、含斜杠、`.` / `..`、超长一律拦下
+            - 重命名同样走校验；建完提示完整路径
+
             **1.7.0**
             - 终端快捷键条：⏎ 回车 / Tab / Ctrl-C / Ctrl-D / 清屏 —— 中文输入法吃掉回车也能执行命令
             - 文件页新增「新建文件」，直接进编辑器（之前只有新建文件夹，`hello.py` 会变成目录）

@@ -201,10 +201,26 @@ class _FilePageState extends State<FilePage> {
   }
 
   /// 新建空文件并直接进编辑器。之前只能用"新建文件夹"，于是 hello.py 变成了目录。
+  /// 名字里带空壳/斜杠/.. 的，直接拦下来——真机上已经出现过"文件名（如 hello.py）"这种鬼名字。
+  String? _checkName(String raw) {
+    final n = raw.trim();
+    if (n.isEmpty) return '名字不能为空';
+    if (n.contains('/') || n.contains('\\')) return '名字里不能有斜杠';
+    if (n == '.' || n == '..') return '这个名字不能用';
+    if (n.length > 120) return '名字太长了';
+    return null;
+  }
+
   Future<void> _newFile() async {
-    final name = await _ask('新建文件', '文件名（如 hello.py）');
-    if (name == null || name.trim().isEmpty) return;
-    final path = '$_path/$name'.replaceAll('//', '/');
+    final name = await _ask('新建文件', hint: '例如 hello.py');
+    if (name == null) return;
+    final bad = _checkName(name);
+    if (bad != null) {
+      _toast(bad);
+      return;
+    }
+    final clean = name.trim();
+    final path = '$_path/$clean'.replaceAll('//', '/');
     try {
       final exists = await _fs.exists(path);
       if (exists) {
@@ -212,6 +228,7 @@ class _FilePageState extends State<FilePage> {
         return;
       }
       await _fs.writeText(path, '');
+      _toast('已创建 $path（0 字节）');
       await _load();
       if (!mounted) return;
       await Navigator.of(context).push(MaterialPageRoute(
@@ -224,10 +241,15 @@ class _FilePageState extends State<FilePage> {
   }
 
   Future<void> _newFolder() async {
-    final name = await _ask('新建文件夹', '文件夹名');
-    if (name == null || name.trim().isEmpty) return;
+    final name = await _ask('新建文件夹', hint: '文件夹名');
+    if (name == null) return;
+    final bad = _checkName(name);
+    if (bad != null) {
+      _toast(bad);
+      return;
+    }
     try {
-      await _fs.mkdir('$_path/$name'.replaceAll('//', '/'));
+      await _fs.mkdir('$_path/${name.trim()}'.replaceAll('//', '/'));
       _load();
     } catch (e) {
       _toast('创建失败：$e');
@@ -260,10 +282,15 @@ class _FilePageState extends State<FilePage> {
     if (!mounted || action == null) return;
     switch (action) {
       case 'rename':
-        final name = await _ask('重命名', e.name);
-        if (name == null || name.trim().isEmpty || name == e.name) return;
+        final name = await _ask('重命名', initial: e.name);
+        if (name == null || name.trim().isEmpty || name.trim() == e.name) return;
+        final bad = _checkName(name);
+        if (bad != null) {
+          _toast(bad);
+          return;
+        }
         try {
-          await _fs.rename(e.path, '$_path/$name'.replaceAll('//', '/'));
+          await _fs.rename(e.path, '$_path/${name.trim()}'.replaceAll('//', '/'));
           _load();
         } catch (err) {
           _toast('重命名失败：$err');
@@ -296,7 +323,7 @@ class _FilePageState extends State<FilePage> {
     }
   }
 
-  Future<String?> _ask(String title, String initial) {
+  Future<String?> _ask(String title, {String initial = '', String hint = ''}) {
     final ctrl = TextEditingController(text: initial);
     return showDialog<String>(
       context: context,
@@ -305,7 +332,7 @@ class _FilePageState extends State<FilePage> {
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '输入名称'),
+          decoration: InputDecoration(hintText: hint.isEmpty ? '输入名称' : hint),
           onSubmitted: (v) => Navigator.pop(context, v),
         ),
         actions: [
