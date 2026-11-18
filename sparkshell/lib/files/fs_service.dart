@@ -105,7 +105,8 @@ class FsService {
   Future<bool> exists(String guestPath) async {
     if (!isSafe(guestPath)) return false;
     final host = toHost(guestPath);
-    return File(host).exists() || Directory(host).exists();
+    if (await File(host).exists()) return true;
+    return Directory(host).exists();
   }
 
   Future<bool> isBinary(String guestPath) async {
