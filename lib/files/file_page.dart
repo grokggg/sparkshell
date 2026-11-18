@@ -35,7 +35,15 @@ class _FilePageState extends State<FilePage> {
   @override
   void initState() {
     super.initState();
-    _load();
+    // rootPath 必须是真实存在的目录；传进来个文件（历史 bug 会把 start.sh 当 rootfs）
+    // 时直接说清楚，别让用户看到"目录不存在: /"这种没头没脑的报错。
+    final dir = Directory(widget.rootPath);
+    if (!dir.existsSync()) {
+      _loading = false;
+      _err = 'rootfs 路径不可用：${widget.rootPath}\n（不是目录或尚未解包）';
+    } else {
+      _load();
+    }
   }
 
   Future<void> _load() async {

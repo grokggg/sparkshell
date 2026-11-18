@@ -108,13 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.6.1-apk
-          name: SparkShell 1.6.1 (文件页自愈：/root 未就绪自动重试 + 诊断)
+          tag_name: v1.6.2-apk
+          name: SparkShell 1.6.2 (修复根因：文件页拿错 rootfs 路径)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
-            **1.6.1 修复真机「目录不存在: /root」**
+            **1.6.2 修复根因：文件页拿到的是 proot 启动脚本路径，不是 rootfs**
+            - 之前文件页的 rootPath = `files/proot/start.sh`（ensureReady 的返回值是脚本路径），所以永远「目录不存在」、上传也落不下去
+            - 现在明确取 `LinuxEnv.rootfsPath`，并且构造时先校验是不是真实目录
+            - 路径不合格时直接说「rootfs 路径不可用」，不再显示 `/` 这种误导性报错
+
+            **1.6.1**
             - 首次解包还没跑到 /root 时自动等待重试（最多 8 次 × 4 秒），不再直接报错
             - 报错页显示真实 rootPath 与 rootfs 前 12 项，一眼定位
             - 新增「建出来再读」按钮
