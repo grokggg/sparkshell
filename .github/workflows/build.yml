@@ -108,21 +108,23 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.4.1-apk
-          name: SparkShell 1.4.1 (Agent 工具循环 · PATH 修复)
+          tag_name: v1.5.0-apk
+          name: SparkShell 1.5.0 (会话持久化 + 7 个工具)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
             两个包，装哪个都行：
-            - `app-alpine.apk`（约 36 MB）：Alpine rootfs，30 秒能下完，先用它验证 proot 链路是否通
-            - `app-debian.apk`（约 147 MB）：Debian bookworm + apt/python3/git，完整功能
+            - `app-alpine.apk`（约 60 MB）：Alpine rootfs，验证链路用，缺什么用 `apk add` 现装
+            - `app-debian.apk`（约 177 MB）：Debian bookworm + apt/python3/git，开箱即用
 
             包名 com.grokggg.sparkshell，arm64-v8a，自签证书。
-            Chat 页：OpenAI 兼容（DeepSeek/通义/Kimi/Ollama），SSE 流式，Key 存应用私有目录。
-            Agent 模式（Chat 右上角机器人图标）：模型可调用 bash / read_file / write_file / list_dir，
-            全部在 proot 容器内执行，每次调用先弹窗审批（可「全部允许」），最多连跑 6 步。
 
-            1.4.1 修复：工具命令没带 PATH，guest 里继承到宿主的 /system/bin，导致 ls/apk/python3 全 not found。
-            现在每条命令都显式 export PATH=/usr/local/sbin:...:/bin，并把容器事实写进 system 提示。
-            修复：rootfs 解包不再以 tar 退出码判定（chown/mknod 必报错但文件完整），改校验关键路径，并把 tar 输出显示到界面上。
+            1.5.0
+            - 会话持久化：Chat 左侧抽屉多会话，新建/切换/删除，每条消息落盘，退出不丢
+            - 工具扩到 7 个：+ edit_file（唯一性校验 / replace_all）、search_files（正则，跳过二进制与大文件）、todo（清单 + 进度）
+            - 容器 DNS 每次启动重写；/sdcard、/storage 挂进容器
+
+            1.4.1
+            - 修复工具命令没带 PATH（guest 里继承宿主 /system/bin，导致 ls/apk/python3 全 not found）
+            - Agent 注入容器事实 preamble（Alpine 用 apk add，Debian 用 apt）
