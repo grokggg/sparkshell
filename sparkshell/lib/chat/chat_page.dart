@@ -438,6 +438,131 @@ class _ChatPageState extends State<ChatPage> {
   }
 
 
+  Widget _pill(IconData icon, String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withOpacity(0.14)),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 13, color: const Color(0xFF9AA7C7)),
+          const SizedBox(width: 5),
+          Text(label, style: const TextStyle(fontSize: 11.5, color: Color(0xFFC9D4EA))),
+        ]),
+      ),
+    );
+  }
+
+  /// 上下文占用环：真实按「字符/4」估算，超 80% 变琥珀色提醒。
+  Widget _usageRing() {
+    final p = _contextUsage();
+    final pct = (p * 100).round();
+    return Tooltip(
+      message: '上下文约 $pct%（按字符估算，窗口 32k）',
+      child: SizedBox(
+        width: 26,
+        height: 26,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            CircularProgressIndicator(
+              value: p,
+              strokeWidth: 2.4,
+              backgroundColor: Colors.white.withOpacity(0.10),
+              valueColor: AlwaysStoppedAnimation(
+                p > 0.8 ? const Color(0xFFE0A458) : const Color(0xFF7DE2D1),
+              ),
+            ),
+            Text('$pct',
+                style: const TextStyle(fontSize: 8.5, color: Color(0xFFB7C4DC))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 点会话卡改标题（dsh go 那页顶部有个铅笔，作用一样）
+  Future<void> _renameSession() async {
+    final s = _session;
+    if (s == null) return;
+    final c = TextEditingController(text: s.title);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('会话标题'),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '例如：装 python 跑脚本'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('保存')),
+        ],
+      ),
+    );
+    if (name == null || name.trim().isEmpty) return;
+    s.title = name.trim();
+    await _store?.save(s);
+    if (mounted) setState(() {});
+  }
+
+  /// 模型自检：真发一个最小请求，只为了确认「通不通、通多久」。
+  Future<void> _pingModel() async {
+    final cfg = _cfg;
+    if (cfg == null || !cfg.ready) {
+      setState(() => _err = '还没填 API Key，点右上角齿轮');
+      return;
+    }
+    setState(() => _status = '正在自检 ${cfg.model}…');
+    final sw = Stopwatch()..start();
+    try {
+      final client = LlmClient(cfg);
+      final msg = await client.complete(<Map<String, dynamic>>[
+        {'role': 'user', 'content': 'ping'},
+      ]);
+      client.dispose();
+      sw.stop();
+      final ok = (msg['content'] as String?)?.trim().isNotEmpty ?? false;
+      setState(() {
+        _status = null;
+        _err = ok ? null : '模型返回了空内容（接入点通，但模型没吐字）';
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? '接入正常：${cfg.model}  ·  ${sw.elapsedMilliseconds}ms'
+            : '接入通了但没内容  ·  ${sw.elapsedMilliseconds}ms'),
+      ));
+      TerminalBus.instance
+          .mirror('\x1b[36m⚙ 自检\x1b[0m ${ok ? 'ok' : '空回复'} ${sw.elapsedMilliseconds}ms\r\n');
+    } catch (e) {
+      sw.stop();
+      final m = _friendly(e);
+      setState(() {
+        _status = null;
+        _err = m;
+      });
+      TerminalBus.instance.mirror('\x1b[31m✗ 自检失败：$m\x1b[0m\r\n');
+    }
+  }
+
+  /// 上下文占用估算：按「1 token ≈ 4 字符」粗算，再做保守上限。
+  /// 不追求精确，也不预置一个好看的数字——发多少算多少。
+  double _contextUsage() {
+    var chars = 0;
+    for (final m in _msgs) {
+      chars += m.text.length;
+    }
+    final tokens = chars / 4.0;
+    const window = 32768.0; // conatus-free 走保守窗口
+    return (tokens / window).clamp(0.0, 1.0);
+  }
+
   /// 把当前对话导出成 JSON，落在容器的 /root/share 下，用文件页「导出」就能拿到手机里。
   Future<void> _exportSession() async {
     final root = LinuxEnv.instance.rootfsPath;
@@ -638,24 +763,79 @@ class _ChatPageState extends State<ChatPage> {
     return Scaffold(
       key: _scaffold,
       drawer: _drawer(context),
-      appBar: AppBar(
-        title: Text(cfg == null ? 'Chat' : 'Chat · ${cfg.model}'),
-        actions: [
-          IconButton(
-            tooltip: _agent ? 'Agent 模式：开' : 'Agent 模式：关',
-            onPressed: () => setState(() => _agent = !_agent),
-            icon: Icon(_agent ? Icons.smart_toy : Icons.smart_toy_outlined),
-            color: _agent ? Theme.of(context).colorScheme.primary : null,
+      body: SafeArea(
+        bottom: false,
+        child: Column(children: [
+          // ── 顶部：圆形菜单 + 会话卡 + 编辑（对齐 dsh go 那页的形态）
+          Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 4),
+            child: Row(children: [
+              IconButton(
+                tooltip: '会话列表',
+                onPressed: () => _scaffold.currentState?.openDrawer(),
+                icon: const Icon(Icons.menu, size: 20),
+              ),
+              Expanded(
+                child: InkWell(
+                  onTap: _renameSession,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDF1F7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _session?.title ?? (cfg == null ? '新会话' : 'Chat · ${cfg.model}'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF0B1020),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Row(children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF2FBF71),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            _agent ? '本机 · workspace' : '本机 · 纯对话',
+                            style: const TextStyle(fontSize: 10.5, color: Color(0xFF5B6884)),
+                          ),
+                        ]),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '导出会话',
+                onPressed: _exportSession,
+                icon: const Icon(Icons.ios_share, size: 18),
+              ),
+              IconButton(
+                tooltip: _agent ? 'Agent 模式：开' : 'Agent 模式：关',
+                onPressed: () => setState(() => _agent = !_agent),
+                icon: Icon(_agent ? Icons.smart_toy : Icons.smart_toy_outlined, size: 20),
+                color: _agent ? const Color(0xFF7DE2D1) : null,
+              ),
+              IconButton(
+                onPressed: _settings,
+                icon: const Icon(Icons.settings, size: 20),
+              ),
+            ]),
           ),
-          IconButton(
-            tooltip: '导出会话',
-            onPressed: _exportSession,
-            icon: const Icon(Icons.ios_share),
-          ),
-          IconButton(onPressed: _settings, icon: const Icon(Icons.settings)),
-        ],
-      ),
-      body: Column(children: [
         if (_status != null && _busy)
           Container(
             width: double.infinity,
@@ -772,11 +952,43 @@ class _ChatPageState extends State<ChatPage> {
                   },
                 ),
         ),
+        // ── 胶囊快捷条（全部是真动作，不做装饰按钮）
+        SizedBox(
+          height: 34,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            children: [
+              _pill(Icons.speed, '模型自检', _pingModel),
+              const SizedBox(width: 6),
+              _pill(Icons.terminal, '跑命令', () {
+                _input.text = '用 bash 执行：ls -la /root';
+                _input.selection = TextSelection.collapsed(offset: _input.text.length);
+              }),
+              const SizedBox(width: 6),
+              _pill(Icons.restore, '恢复', () {
+                final s0 = _session;
+                if (s0 != null) _openSession(s0);
+              }),
+              const SizedBox(width: 6),
+              _pill(Icons.timeline, '时间线', () => _scaffold.currentState?.openDrawer()),
+            ],
+          ),
+        ),
         SafeArea(
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
             child: Row(children: [
+              // 附件/@文件：把 /root/ 预填进输入框，路径由用户接着补
+              IconButton(
+                tooltip: '插入文件路径',
+                onPressed: () {
+                  _input.text = '${_input.text}@/root/'.trimLeft();
+                  _input.selection = TextSelection.collapsed(offset: _input.text.length);
+                },
+                icon: const Icon(Icons.add_circle_outline, size: 20),
+              ),
               Expanded(
                 child: TextField(
                   controller: _input,
@@ -791,7 +1003,9 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
+              _usageRing(),
+              const SizedBox(width: 4),
               _busy
                   ? IconButton.filled(
                       onPressed: () {
@@ -807,7 +1021,8 @@ class _ChatPageState extends State<ChatPage> {
             ]),
           ),
         ),
-      ]),
+        ]),
+      ),
     );
   }
 }

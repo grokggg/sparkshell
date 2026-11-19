@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.4.0-apk
-          name: SparkShell 2.4.0 (工具调用像 dsh go 那样一行一条)
+          tag_name: v2.5.0-apk
+          name: SparkShell 2.5.0 (Chat 页对齐 dsh go 形态)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.5.0 — Chat 页对齐 dsh go**
+            - 顶部换成会话卡：圆形菜单 + 浅色卡片（标题 + 绿点「本机 · workspace」）+ 导出/Agent 开关/设置，点卡片可改名
+            - 输入区加胶囊快捷条：模型自检（真发 ping 请求并显示毫秒）、跑命令、恢复、时间线
+            - 输入框左侧 + 插入 @/root/ 文件路径；右侧上下文占用环（按字符/4 估算，超 80% 变琥珀）
+            - 不再有 AppBar，整页从状态栏下直接是会话卡，和原版布局一致
+
             **2.4.0 — 工具调用一行一条**
             - Chat 里工具不再是原始 JSON 卡片：图标 + 中文动词（跑命令/读取/写入/编辑/列目录/查找）+ 参数摘要 + 耗时
             - 点该行看完整输出，长输出再点开也不刷屏
