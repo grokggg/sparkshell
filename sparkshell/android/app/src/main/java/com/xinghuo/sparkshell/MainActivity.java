@@ -343,7 +343,7 @@ public class MainActivity extends FlutterActivity {
             }
             Uri uri = FileProvider.getUriForFile(
                     getApplicationContext(),
-                    BuildConfig.APPLICATION_ID + ".fileprovider",
+                    getPackageName() + ".fileprovider",
                     apk);
             Intent i = new Intent(Intent.ACTION_VIEW);
             i.setDataAndType(uri, "application/vnd.android.package-archive");
