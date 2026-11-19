@@ -108,12 +108,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.0-apk
-          name: SparkShell 2.0.0 (完整功能版)
+          tag_name: v2.0.1-apk
+          name: SparkShell 2.0.1 (装工具链不再误跑 apt-get)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.0.1**
+            - 修「装工具链」：`apk add ... || apt-get ...` 改成 `if apk; then ... else apt; fi`
+              （Alpine 在 proot 下 trigger 返回非 0，原写法会把 Debian 分支也跑一遍，于是冒出 `apt-get: not found`）
+            - 装完自动自检：打印 python3 / git / curl 版本，并提示那 1 error 是 proot 噪音
+
             **2.0.0 — 完整功能版**
             - 重试策略重写：同一接入点最多试 5 次（退避 1.2/2.5/5/9s），界面实时显示「连接不稳定，正在重试 2/5…」
             - 错误分类说人话：限流(429) / 接入点暂时不稳定(5xx/522) / Key 失效(401) 分得清，**不再建议换模型**
