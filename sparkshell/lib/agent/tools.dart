@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../linux_env.dart';
+import '../term/terminal_bus.dart';
 import 'task_store.dart';
 
 /// Agent 可用的四个动作。全部作用在 proot 容器里，宿主目录不暴露。
@@ -211,12 +212,15 @@ class Tools {
     final cmd = (a['command'] as String? ?? '').trim();
     if (cmd.isEmpty) return '缺少 command';
     if (a['background'] == true) return _bashBackground(cmd);
+    TerminalBus.instance.echoCommand(cmd);
     final secs = ((a['timeout'] as num?)?.toInt() ?? 120).clamp(5, 600);
     final r = await LinuxEnv.instance
         .execShell(cmd)
         .timeout(Duration(seconds: secs), onTimeout: () => ProcessResult(0, 124, '', '超时 ${secs}s'));
     final out = '${r.stdout}${r.stderr}'.trim();
     final body = out.length > 8000 ? '${out.substring(0, 8000)}\n…(截断)' : out;
+    // 同一个入口：命令和结果都回灌到 Linux 页的终端屏幕
+    TerminalBus.instance.echoResult(out);
     return '[exit ${r.exitCode}]\n${body.isEmpty ? '(无输出)' : body}';
   }
 
@@ -301,7 +305,9 @@ class Tools {
   static Future<String> _bashBackground(String cmd) async {
     final store = _taskStore();
     if (store == null) return '容器还没准备好，先 ensureReady';
+    TerminalBus.instance.echoCommand('$cmd   # 后台');
     final t = await store.start(cmd, (sh) => LinuxEnv.instance.execShell(sh));
+    TerminalBus.instance.echoResult('[后台任务 ${t.id} 已启动，日志 ${t.logPath}]');
     return '已在后台启动：${t.id}\n命令：${t.command}\n'
         '日志：${t.logPath}\n稍后用 task_log(id="${t.id}") 看输出，task_list 看全部。';
   }

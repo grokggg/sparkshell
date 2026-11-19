@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
+import 'term/terminal_bus.dart';
+
 /// 本地 PTY：C 层 openpty + fork + execv("/system/bin/sh")，JNI 暴露 fd。
 class PtyTerminalPage extends StatefulWidget {
   const PtyTerminalPage({
@@ -31,6 +33,7 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
   static const _ch = MethodChannel('com.xinghuo.sparkshell/pty');
 
   final _term = Terminal(maxLines: 5000);
+  final _ai = TextEditingController();
   int _fd = -1;
   Timer? _pump;
   String _status = '未启动';
@@ -38,6 +41,8 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
   @override
   void dispose() {
     _pump?.cancel();
+    TerminalBus.instance.detach();
+    _ai.dispose();
     if (_fd >= 0) {
       _ch.invokeMethod('close', {'fd': _fd});
     }
@@ -65,6 +70,8 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
         _status = _fd >= 0 ? 'fd=$_fd  $shell' : '打开失败';
       });
       _term.write('\r\n[sparkshell] pty opened, fd=$_fd\r\n');
+      // AI 的动作从这里流进终端屏幕：一个入口，不再两套世界
+      TerminalBus.instance.attach(_term.write);
       _term.onOutput = (data) {
         final bytes = Uint8List.fromList(utf8.encode(data));
         _ch.invokeMethod('write', {'fd': _fd, 'data': bytes});
@@ -86,6 +93,15 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
     // apk/apt 是同步阻塞的，等提示符回来就当作结束；这里只做按钮防抖。
     await Future.delayed(const Duration(seconds: 25));
     if (mounted) setState(() => _installing = false);
+  }
+
+  /// 终端里的 AI 输入条：问题交给 Chat 的 Agent，回答会同步镜像回这块屏幕。
+  void _askAi() {
+    final q = _ai.text.trim();
+    if (q.isEmpty) return;
+    _ai.clear();
+    _term.write('\r\n\x1b[35m? 你\x1b[0m $q\r\n');
+    TerminalBus.instance.askAi(q);
   }
 
   /// 中文输入法常把回车吃掉（先确认候选词），所以按钮直发字节，绕开 IME。
@@ -151,6 +167,32 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
               ),
             ],
           ),
+        ),
+        Container(
+          color: const Color(0xFF0B1220),
+          padding: const EdgeInsets.fromLTRB(8, 6, 4, 0),
+          child: Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _ai,
+                style: const TextStyle(fontSize: 13),
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _askAi(),
+                decoration: const InputDecoration(
+                  isDense: true,
+                  prefixIcon: Icon(Icons.auto_awesome, size: 16),
+                  hintText: '问 AI：装个 python3，跑一下 hello.py…',
+                  hintStyle: TextStyle(fontSize: 12),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: '发给 AI',
+              onPressed: _askAi,
+              icon: const Icon(Icons.send, size: 18),
+            ),
+          ]),
         ),
         Container(
           color: const Color(0xFF0B1220),

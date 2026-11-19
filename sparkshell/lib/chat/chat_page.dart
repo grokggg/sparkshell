@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 import '../agent/agent_runner.dart';
 import '../app_bus.dart';
 import '../linux_env.dart';
+import '../term/terminal_bus.dart';
+import 'tool_card.dart';
 import 'api_config.dart';
 import 'llm_client.dart';
 import 'session_store.dart';
@@ -51,6 +53,9 @@ class _ChatPageState extends State<ChatPage> {
   /// 重试进度文案（「连接不稳定，正在重试 2/5…」），成功后清空。
   String? _status;
 
+  /// 终端输入条来的问题
+  StreamSubscription<String>? _aiSub;
+
   /// 把 HTTP 错误翻译成人话：免费模型 429 不是崩溃，是额度/限流。
   String _friendly(Object e) {
     final t = '$e';
@@ -73,6 +78,12 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     AppBus.pendingChatFile.addListener(_takePendingFile);
+    _aiSub = TerminalBus.instance.aiRequests.listen((q) {
+      if (!mounted) return;
+      _input.text = q;
+      if (!_agent) setState(() => _agent = true);
+      _send();
+    });
     _boot();
   }
 
@@ -216,6 +227,7 @@ class _ChatPageState extends State<ChatPage> {
     _sub?.cancel();
     _client?.dispose();
     AppBus.pendingChatFile.removeListener(_takePendingFile);
+    _aiSub?.cancel();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -325,6 +337,12 @@ class _ChatPageState extends State<ChatPage> {
         if (!mounted) return;
         setState(() => _msgs.add(_Msg('assistant', t)));
         _toBottom();
+        // 一个入口：回答也落到终端屏幕上
+        if (TerminalBus.instance.live) {
+          final flat = t.replaceAll('\n', ' ').trim();
+          TerminalBus.instance.mirror(
+              '\x1b[35m🤖\x1b[0m ${flat.length > 400 ? '${flat.substring(0, 400)}…' : flat}\r\n');
+        }
       },
       onToolResult: (t) {
         if (!mounted) return;
@@ -547,6 +565,13 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// 卡片标题：工具输出的第一行（通常是「[exit 0]」或「已写入 xxx」）
+  static String _toolTitle(String text) {
+    final first = text.split('\n').first.trim();
+    if (first.isEmpty) return '工具输出';
+    return first.length > 80 ? '${first.substring(0, 80)}…' : first;
+  }
+
   /// 工具结果里带 diff（@@ / + / -）时，按行上色，改了什么一眼看得见。
   static TextSpan _toolSpan(String text) {
     final spans = <TextSpan>[];
@@ -662,13 +687,9 @@ class _ChatPageState extends State<ChatPage> {
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: m.role == 'tool'
-                            ? SelectableText.rich(
-                                _toolSpan(m.text.isEmpty ? '…' : m.text),
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  height: 1.4,
-                                  fontFamily: 'monospace',
-                                ),
+                            ? ToolResultCard(
+                                title: _toolTitle(m.text),
+                                text: m.text,
                               )
                             : SelectableText(
                                 m.text.isEmpty ? '…' : m.text,
