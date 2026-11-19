@@ -64,35 +64,54 @@ class LlmClient {
   }
 
   Stream<String> chat(List<Map<String, String>> messages) async* {
+    final sys = cfg.systemPrompt.trim();
     final body = jsonEncode({
       'model': cfg.model,
       'stream': true,
       'temperature': cfg.temperature,
       'messages': [
-        if (cfg.systemPrompt.trim().isNotEmpty)
-          {'role': 'system', 'content': cfg.systemPrompt},
+        if (sys.isNotEmpty) {'role': 'system', 'content': sys},
         ...messages,
       ],
     });
 
-    final resp = await _open('/chat/completions', () => body, sse: true);
-
-    await for (final line
-        in resp.transform(utf8.decoder).transform(const LineSplitter())) {
-      if (!line.startsWith('data:')) continue;
-      final payload = line.substring(5).trim();
-      if (payload == '[DONE]') break;
-      try {
-        final m = jsonDecode(payload) as Map<String, dynamic>;
-        final delta = (m['choices'] as List?)?.isNotEmpty == true
-            ? (m['choices'][0] as Map)['delta'] as Map?
-            : null;
-        final text = delta?['content'] as String?;
-        if (text != null && text.isNotEmpty) yield text;
-      } catch (_) {
-        // 单帧坏掉不中断整个流
+    var emitted = false;
+    try {
+      final resp = await _open('/chat/completions', () => body, sse: true);
+      await for (final line
+          in resp.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (!line.startsWith('data:')) continue;
+        final payload = line.substring(5).trim();
+        if (payload == '[DONE]') break;
+        try {
+          final m = jsonDecode(payload) as Map<String, dynamic>;
+          final delta = (m['choices'] as List?)?.isNotEmpty == true
+              ? (m['choices'][0] as Map)['delta'] as Map?
+              : null;
+          final text = delta?['content'] as String?;
+          if (text != null && text.isNotEmpty) {
+            emitted = true;
+            yield text;
+          }
+        } catch (_) {
+          // 单帧坏掉不中断整个流
+        }
       }
+      return;
+    } catch (e) {
+      // 已经吐过字就不重来，避免用户看到重复段落
+      if (emitted) rethrow;
     }
+
+    // 流式走不通（免费中转常把 SSE 掐断）→ 同一接入点、同一模型，改成整段返回。
+    // 用户明确要求：不换模型、不换接入点，只换传输方式。
+    onRetry?.call('流式被中断，改用整段返回（模型仍是 ${cfg.model}）');
+    final msg = await complete([
+      if (sys.isNotEmpty) {'role': 'system', 'content': sys},
+      ...messages.map((e) => <String, dynamic>{...e}),
+    ]);
+    final text = (msg['content'] as String?) ?? '';
+    if (text.isNotEmpty) yield text;
   }
 
   /// 非流式一轮，供 Agent 工具循环用（工具调用必须拿到完整 tool_calls）。

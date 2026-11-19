@@ -17,6 +17,7 @@ class AgentRunner {
     required this.onToolResult,
     required this.approve,
     this.maxSteps = 12,
+    this.onStatus,
   });
 
   final ApiConfig cfg;
@@ -24,6 +25,9 @@ class AgentRunner {
   final void Function(String rendered) onToolResult;
   final Approve approve;
   final int maxSteps;
+
+  /// 重试/等待类状态：只更新顶部进度条，不往对话里插气泡（否则每条都出现两遍）
+  final void Function(String? status)? onStatus;
 
   /// 容器事实写进 system：不写这段，模型会满世界找 python3、把步数烧在探测上。
   static const preamble = '你在一台 Android 手机的 proot 容器里，rootfs 为 Alpine 或 Debian，'
@@ -49,8 +53,9 @@ class AgentRunner {
     }
     final client = LlmClient(
       cfg,
-      onRetry: (m) => onToolResult('⏳ $m'),
+      onRetry: (m) => onStatus?.call(m),
     );
+    onStatus?.call(null);
     try {
       for (var step = 0; step < maxSteps; step++) {
         final msg = await client.complete(messages, tools: Tools.specs);

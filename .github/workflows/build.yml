@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.2.0-apk
-          name: SparkShell 2.2.0 (默认七牛云 + 界面收敛)
+          tag_name: v2.3.0-apk
+          name: SparkShell 2.3.0 (抗抖动：流式自动降级)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.3.0 — 抗抖动**
+            - 重试提示不再重复两遍：只留在顶部琥珀条，Agent 不再往对话里插 ⏳ 气泡
+            - 流式被中转掐断时自动改用整段返回，**同一接入点、同一模型**，只换传输方式
+            - 已经吐过字再断流不会重来，避免同一段回答出现两次
+            - 5 次重试用尽后的文案说清是「排队/源站超时，不是 Key 坏了」，403 与 401 分开提示
+
             **2.2.0 — 默认七牛云 · 界面收敛**
             - 默认接入点改为七牛云 Conatus：`https://api.qnaigc.com/v1` / `qiniu/conatus-free`，重装不用再手动改
             - 去掉重复的 PTY 页（Linux 页本身就是容器里的 PTY），6 个 Tab → 5 个

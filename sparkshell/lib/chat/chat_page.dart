@@ -67,12 +67,16 @@ class _ChatPageState extends State<ChatPage> {
       }
       return '请求太频繁被限流（429），等几十秒再试。';
     }
-    if (t.contains('401')) return 'API Key 无效或过期（401），去设置里重新填。';
-    if (RegExp(r'\b5\d\d\b').hasMatch(t)) {
-      return '接入点暂时不稳定（已自动重试 5 次）：这是中转链路的抖动，不是 Key 失效，'
-          '稍等一下点「重试」就能续上。';
+    if (t.contains('401') || t.contains('403')) {
+      return 'Key 无效、过期或被风控（401/403）：去右上角设置确认是七牛云的 key，模型写 qiniu/conatus-free。';
     }
-    if (t.contains('SocketException') || t.contains('timeout')) return '网络连不上模型服务，检查网络或换个接入点。';
+    if (RegExp(r'\b5\d\d\b').hasMatch(t)) {
+      return '接入点抖动（5xx，已按同一模型重试 5 次，仍未成功）：免费模型这会儿在排队或中转源站超时，'
+          '不是你的 Key 坏了。等 20-30 秒点「重试」，多半就通。';
+    }
+    if (t.contains('SocketException') || t.contains('timeout')) {
+      return '连不上模型服务（超时）：先确认手机网络，再点「重试」；同一接入点重试几次通常能过。';
+    }
     return t;
   }
 
@@ -349,6 +353,9 @@ class _ChatPageState extends State<ChatPage> {
 
     final runner = AgentRunner(
       cfg: cfg,
+      onStatus: (m) {
+        if (mounted) setState(() => _status = m);
+      },
       onText: (t) {
         if (!mounted) return;
         setState(() => _msgs.add(_Msg('assistant', t)));
