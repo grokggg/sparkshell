@@ -34,6 +34,7 @@ class LlmClient {
     final client = _http ??= HttpClient()..connectionTimeout = const Duration(seconds: 30);
     final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     HttpException? last;
+    var reason = 'network';
 
     for (var attempt = 1; attempt <= _policy.maxAttempts; attempt++) {
       try {
@@ -47,6 +48,7 @@ class LlmClient {
 
         final err = await resp.transform(utf8.decoder).join();
         final out = _policy.judge(statusCode: resp.statusCode, body: err);
+        reason = out.reason;
         last = HttpException(out.tip);
         if (!out.retry) throw last; // Key 失效 / 参数错，重试没意义
       } on SocketException catch (e) {
@@ -55,9 +57,15 @@ class LlmClient {
         last = HttpException(_policy.judge(networkError: 'timeout').tip);
       }
 
+      // 限流别死磕：免费额度窗口可能要几分钟，5 次全等下来 2 分多钟，
+      // 用户以为卡死了。3 次（8s+20s）不行就交回界面，让他点重试。
+      if (reason == 'rate_limit' && attempt >= 3) break;
+
       if (attempt < _policy.maxAttempts) {
-        onRetry?.call(progressText(attempt + 1, _policy.maxAttempts));
-        await Future<void>.delayed(Duration(milliseconds: _policy.delayMs(attempt)));
+        final wait = _policy.delayFor(attempt, reason);
+        onRetry?.call(
+            progressText(attempt + 1, _policy.maxAttempts, reason: reason, delayMs: wait));
+        await Future<void>.delayed(Duration(milliseconds: wait));
       }
     }
     throw last ?? const HttpException('请求失败');

@@ -158,6 +158,8 @@ class AgentRunner {
       '`command -v python3 >/dev/null || apk add --no-cache python3; cd /root && python3 xxx.py`。'
       'Debian 用 `command -v python3 >/dev/null || (apt-get update && apt-get install -y python3)`。\n'
       'apk/apt 源已在 App 侧换成国内镜像，装包通常几十秒；超过 2 分钟没输出就先换策略。\n'
+      '判断发行版只认 `grep ^ID= /etc/os-release`（alpine / debian / ubuntu）。'
+      'Alpine 上 `command -v apt-get` 有时也会命中一个空壳，别拿它当依据；能装包的只有 apk。\n'
       '改写文件优先 edit_file（只传 old/new 片段），整文件覆盖才用 write_file。\n'
       '如果这个接入点不支持 function calling（你发不出 tool_calls），改用文本协议，一行一条：\n'
       '<tool name="bash">{"command":"ls -la /root"}</tool>\n'

@@ -29,9 +29,18 @@ class TerminalBus {
 
   void mirror(String text) => _mirror?.call(text);
 
-  /// AI 要执行命令时，先在终端里留一行青色徽标，避免"黑箱"
-  void echoCommand(String cmd) {
-    mirror('\r\n\x1b[36m▶ AI\x1b[0m \x1b[1m$cmd\x1b[0m\r\n');
+  /// AI 要执行命令时，先在终端里留一行青色徽标，避免"黑箱"。
+  ///
+  /// 一条 for 循环 + 五个 `command -v` 能把 220 宽的行折成 8 行，
+  /// 整屏都是命令、看不见结果。所以：多行只留首行 + 行数，超长截断 + …
+  void echoCommand(String cmd, {int maxChars = 120}) {
+    var one = cmd.trim().replaceAll(RegExp(r'\s*\n\s*'), ' ');
+    final lines = cmd.trim().split('\n').length;
+    if (one.length > maxChars) {
+      one = '${one.substring(0, maxChars)}…';
+    }
+    final more = lines > 1 ? ' \x1b[90m(+${lines - 1} 行)\x1b[0m' : '';
+    mirror('\r\n\x1b[36m▶ AI\x1b[0m \x1b[1m$one\x1b[0m$more\r\n');
   }
 
   /// 命令输出回灌：暗灰缩进，太长只保留尾部

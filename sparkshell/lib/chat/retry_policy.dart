@@ -31,7 +31,11 @@ class RetryOutcome {
 /// await Future<void>.delayed(Duration(milliseconds: policy.delayMs(attempt)));
 /// ```
 class RetryPolicy {
-  const RetryPolicy({this.maxAttempts = 5, this.delays = const [1200, 2500, 5000, 9000]});
+  const RetryPolicy({
+    this.maxAttempts = 5,
+    this.delays = const [1200, 2500, 5000, 9000],
+    this.rateLimitDelays = const [8000, 20000, 45000, 60000],
+  });
 
   /// 最多试几次（含第一次）
   final int maxAttempts;
@@ -39,14 +43,24 @@ class RetryPolicy {
   /// 每次失败后的等待毫秒数，长度应 >= maxAttempts-1
   final List<int> delays;
 
-  /// attempt 从 1 开始，返回第 attempt 次失败后要等多久；越界返回最后一个。
-  int delayMs(int attempt) {
-    if (delays.isEmpty) return 0;
+  /// 限流（429）专用的退避：免费额度被打穿时，1-2 秒重试只会再吃一次 429，
+  /// 必须等够时间让对方的计数窗口滑过去。
+  final List<int> rateLimitDelays;
+
+  /// 按故障类型取等待时间；限流走更长的那条曲线。
+  int delayFor(int attempt, String reason) =>
+      _pick(reason == 'rate_limit' ? rateLimitDelays : delays, attempt);
+
+  int _pick(List<int> list, int attempt) {
+    if (list.isEmpty) return 0;
     final i = attempt - 1;
-    if (i <= 0) return delays.first;
-    if (i >= delays.length) return delays.last;
-    return delays[i];
+    if (i <= 0) return list.first;
+    if (i >= list.length) return list.last;
+    return list[i];
   }
+
+  /// attempt 从 1 开始，返回第 attempt 次失败后要等多久；越界返回最后一个。
+  int delayMs(int attempt) => _pick(delays, attempt);
 
   /// statusCode 为 null 表示根本没拿到 HTTP 响应（SocketException / TimeoutException / DNS）。
   RetryOutcome judge({int? statusCode, String body = '', String? networkError}) {
@@ -131,11 +145,19 @@ class RetryPolicy {
 }
 
 /// 重试中的进度提示，例：'连接不稳定，正在重试 2/5…'
-String progressText(int attempt, int maxAttempts) {
+String progressText(int attempt, int maxAttempts, {String? reason, int? delayMs}) {
   final max = maxAttempts < 1 ? 1 : maxAttempts;
   var a = attempt < 1 ? 1 : attempt;
   if (a > max) a = max;
-  return '连接不稳定，正在重试 $a/$max…';
+  final secs = delayMs == null ? null : (delayMs / 1000).round();
+  if (reason == 'rate_limit') {
+    return secs == null
+        ? '限流了，正在退避重试 $a/$max…'
+        : '限流（429）：等 $secs 秒再发（$a/$max）';
+  }
+  return secs == null
+      ? '连接不稳定，正在重试 $a/$max…'
+      : '连接不稳定：等 $secs 秒重试（$a/$max）';
 }
 
 /// 把 catch 到的异常转成 [RetryPolicy.judge] 需要的 networkError 文案。

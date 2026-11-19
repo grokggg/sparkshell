@@ -74,7 +74,7 @@ class _ChatPageState extends State<ChatPage> {
       if (t.contains('free')) {
         return '免费模型额度用完了（429）。去右上角设置换一个模型，或等 1 分钟再发。';
       }
-      return '请求太频繁被限流（429），等几十秒再试。';
+      return '请求太频繁被限流（429）。免费额度是全网共用的，等 30-60 秒再点重试通常就过。';
     }
     if (t.contains('401') || t.contains('403')) {
       return 'Key 无效、过期或被风控（401/403）：去右上角设置确认是七牛云的 key，模型写 qiniu/conatus-free。';

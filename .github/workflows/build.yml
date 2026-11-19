@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.6.1-apk
-          name: SparkShell 2.6.1 (吃下模型的脏标签)
+          tag_name: v2.7.0-apk
+          name: SparkShell 2.7.0 (限流友好 + 终端不刷屏)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.7.0 — 限流友好 + 终端不刷屏**
+            - 429 走单独退避曲线（8s/20s/45s/60s），不再 1-2 秒硬撞；最多试 3 次就交回界面点重试
+            - 提示带秒数：「限流（429）：等 20 秒再发（2/5）」
+            - 终端镜像里长命令截断到 120 字符、多行折成一行标 `(+N 行)`，不再一条命令占满整屏
+            - preamble 纠正发行版判断：Alpine 上 `command -v apt-get` 可能命中空壳，只认 `/etc/os-release` 的 ID
+
             **2.6.1 — 吃下模型的脏标签**
             - 上一版只认 `</tool>`，模型实际吐的是 `</arg_value>` / `</iquest_tool_call>`，所以整段被当正文显示
             - 解析器改成「找到平衡的 JSON 就结束」，后面跟什么脏标签都当噪音，连续多个也一并吃掉
