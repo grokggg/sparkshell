@@ -108,12 +108,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.7.0-apk
-          name: SparkShell 2.7.0 (限流友好 + 终端不刷屏)
+          tag_name: v2.8.0-apk
+          name: SparkShell 2.8.0 (SSH 可用了 + Agent 可中断)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.8.0 — SSH 可用了 + Agent 可中断**
+            - SSH：私钥认证（粘贴 PEM / 从手机选文件）、SHA256 主机指纹确认（记住 / 本次 / 取消）、保存主机、20s keepalive、断线提示与重连
+            - Agent：发送键在跑的时候变成 ⏹，点了真断 socket（HttpClient.close(force:true)），不等超时；重试循环里也立刻醒
+            - AgentRunner 8 个检查点，取消后写一条「⏹ 已按你的要求停止」再退出，不会把半截结果当结论
+
             **2.7.0 — 限流友好 + 终端不刷屏**
             - 429 走单独退避曲线（8s/20s/45s/60s），不再 1-2 秒硬撞；最多试 3 次就交回界面点重试
             - 提示带秒数：「限流（429）：等 20 秒再发（2/5）」

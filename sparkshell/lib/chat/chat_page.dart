@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../agent/agent_runner.dart';
+import '../agent/cancel_token.dart';
 import '../app_bus.dart';
 import '../linux_env.dart';
 import '../agent/tools.dart';
@@ -61,6 +62,19 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 重试进度文案（「连接不稳定，正在重试 2/5…」），成功后清空。
   String? _status;
+
+  /// 本轮取消令牌：每轮发送重建一个，停止后旧的自然作废。
+  CancelToken? _token;
+
+  /// 用户点过停止：本轮不再插入任何额外气泡，
+  /// 只保留 Agent 自己写的那条「⏹ 已按你的要求停止」。
+  bool _stopNote = false;
+
+  /// 上面那条提示是否已经落到对话里（停止恰好卡在两轮之间时 run 里没人写，就在收尾时补一条）
+  bool _stopShown = false;
+
+  /// 正在收尾：按钮已经回到「发送」，旧 run 还没退出，状态条继续显示「正在停止…」。
+  bool _stopping = false;
 
   /// 终端输入条来的问题
   StreamSubscription<String>? _aiSub;
@@ -247,6 +261,8 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    // 页面销毁时把在途请求也掐掉，别让 socket 挂到 90 秒超时
+    _token?.cancel();
     _sub?.cancel();
     _client?.dispose();
     AppBus.pendingChatFile.removeListener(_takePendingFile);
@@ -277,8 +293,15 @@ class _ChatPageState extends State<ChatPage> {
     }
     _input.clear();
     _lastTry = text;
+    // 新一轮：令牌必须重建。上一轮那颗已经 cancel 过，永远保持 isCancelled，
+    // 复用会让这一轮第一步就被判成「已停止」。
+    _token?.cancel();
+    final token = _token = CancelToken();
+    _stopNote = false;
+    _stopShown = false;
+    _stopping = false;
     if (_agent) {
-      await _sendAgent(text, cfg);
+      await _sendAgent(text, cfg, token);
       return;
     }
     final reply = _Msg('assistant', '');
@@ -303,13 +326,25 @@ class _ChatPageState extends State<ChatPage> {
     );
     final buf = StringBuffer();
     final done = Completer<void>();
-    _sub = client.chat(history).listen(
+    // 停止时我们会 cancel 掉订阅，而 StreamSubscription.cancel() 不触发 onDone，
+    // 这里挂一颗令牌兜底完成，_send 才不会永远挂在 await 上（那样这轮也不会落盘）
+    unawaited(token.whenCancelled.then((_) {
+      if (!done.isCompleted) done.complete();
+    }));
+    _sub = client.chat(history, cancel: token).listen(
       (delta) {
+        // 已点停止：晚到的增量不再往气泡里写
+        if (token.isCancelled) return;
         buf.write(delta);
         setState(() => reply.text = buf.toString());
         _toBottom();
       },
       onError: (Object e) {
+        // 主动停止时 socket 被拆，抛出来的异常不算错误，别弹红条
+        if (token.isCancelled) {
+          if (!done.isCompleted) done.complete();
+          return;
+        }
         final m = _friendly(e);
         setState(() => _err = m);
         TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
@@ -321,17 +356,39 @@ class _ChatPageState extends State<ChatPage> {
       cancelOnError: true,
     );
     await done.future;
-    if (mounted) {
+    // 只在「还是这一轮」时收尾：用户已经点停止并发了新消息的话，
+    // 这里再去改 _busy 会把新一轮的状态打乱
+    if (mounted && identical(_token, token)) {
       setState(() {
         _busy = false;
+        _stopping = false;
         _status = null;
       });
     }
     await _persist();
   }
 
+  /// 停止：先把令牌打掉 + 断 socket，再改 UI。
+  ///
+  /// 顺序很重要——`cancel()` 会同步触发 LlmClient 里的 `close(force: true)`，
+  /// 在途 HTTP 立刻断开；UI 这边不用等它，先放开输入框，
+  /// 状态条留一句「正在停止…」直到 run 真正退出。
+  void _stopAgent() {
+    _token?.cancel();
+    _sub?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _stopNote = true;
+      _busy = false;
+      _stopping = true;
+      _status = '正在停止…';
+      _err = null;
+    });
+    _toBottom();
+  }
+
   /// Agent 模式：模型要工具 → 弹窗审批 → 容器内执行 → 结果回灌。
-  Future<void> _sendAgent(String text, ApiConfig cfg) async {
+  Future<void> _sendAgent(String text, ApiConfig cfg, CancelToken token) async {
     setState(() {
       _msgs.add(_Msg('user', text));
       _busy = true;
@@ -348,6 +405,7 @@ class _ChatPageState extends State<ChatPage> {
         const m = '容器没准备好，先去 Linux 页看一眼';
         setState(() {
           _busy = false;
+          _stopping = false;
           _err = m;
         });
         TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
@@ -362,11 +420,17 @@ class _ChatPageState extends State<ChatPage> {
 
     final runner = AgentRunner(
       cfg: cfg,
+      cancel: token,
       onStatus: (m) {
-        if (mounted) setState(() => _status = m);
+        // 停止后的「正在停止…」不覆盖：旧 run 可能在收尾时回调一条重试文案
+        if (mounted && identical(_token, token)) setState(() => _status = m);
       },
       onText: (t) {
         if (!mounted) return;
+        // 旧一轮（已被新消息顶替）的迟到回调一律丢弃
+        if (!identical(_token, token)) return;
+        // 点过停止之后不再插新气泡：run 里已经写过「⏹ 已按你的要求停止」
+        if (_stopNote || token.isCancelled) return;
         setState(() => _msgs.add(_Msg('assistant', t)));
         _toBottom();
         // 一个入口：回答也落到终端屏幕上
@@ -378,32 +442,54 @@ class _ChatPageState extends State<ChatPage> {
       },
       onTool: (e) {
         if (!mounted) return;
+        if (!identical(_token, token)) return;
+        if (_stopNote) return;
         setState(() => _msgs.add(_Msg('tool', e.output,
             tool: e.name, args: e.args, ok: e.ok, ms: e.ms)));
         _toBottom();
       },
       onToolResult: (t) {
         if (!mounted) return;
+        if (!identical(_token, token)) return;
+        if (t.contains('⏹ 已按你的要求停止')) _stopShown = true;
         setState(() => _msgs.add(_Msg('tool', t)));
         _toBottom();
       },
-      approve: _approve,
+      approve: (name, args) async {
+        // 停止时审批框可能还开着：先关掉它，别让用户对着一个没用的弹窗发呆
+        if (token.isCancelled) return false;
+        return await _approve(name, args);
+      },
     );
 
     try {
       await runner.run(history);
     } catch (e) {
-      if (mounted) {
+      // 停止引起的 socket 异常不当错误显示
+      if (mounted && !token.isCancelled) {
         final m = _friendly(e);
         setState(() => _err = m);
         TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _status = null;
-        });
+      // 只有「还是当前这一轮」才收尾：停止后用户可能已经发了新消息，
+      // 旧 run 退出时不能把新一轮的 _busy/_status 抹掉
+      if (identical(_token, token)) {
+        if (mounted) {
+          setState(() {
+            _busy = false;
+            _stopping = false;
+            _status = null;
+          });
+          // 停止恰好卡在「上一步刚跑完」的缝隙里时，run 里没有机会写提示，
+          // 这里补一条，保证用户一定看得到「已停止」而不是静默结束
+          if (_stopNote && !_stopShown) {
+            _stopShown = true;
+            setState(() => _msgs.add(_Msg('tool', '⏹ 已按你的要求停止')));
+            _toBottom();
+          }
+        }
+        _stopNote = false;
       }
       await _persist();
     }
@@ -840,7 +926,7 @@ class _ChatPageState extends State<ChatPage> {
               ),
             ]),
           ),
-        if (_status != null && _busy)
+        if (_status != null && (_busy || _stopping))
           Container(
             width: double.infinity,
             color: Colors.amber.withOpacity(0.12),
@@ -1012,10 +1098,10 @@ class _ChatPageState extends State<ChatPage> {
               const SizedBox(width: 4),
               _busy
                   ? IconButton.filled(
-                      onPressed: () {
-                        _sub?.cancel();
-                        setState(() => _busy = false);
-                      },
+                      tooltip: '停止',
+                      // 停止要真断 socket：_token.cancel() 会一路传到
+                      // HttpClient.close(force: true)，不是只把界面标成空闲
+                      onPressed: _stopAgent,
                       icon: const Icon(Icons.stop),
                     )
                   : IconButton.filled(

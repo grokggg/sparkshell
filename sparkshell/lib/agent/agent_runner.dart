@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../chat/api_config.dart';
 import '../chat/llm_client.dart';
+import 'cancel_token.dart';
 import 'tools.dart';
 
 typedef Approve = Future<bool> Function(String name, Map<String, dynamic> args);
@@ -36,6 +37,7 @@ class AgentRunner {
     this.onTool,
     this.maxSteps = 12,
     this.onStatus,
+    this.cancel,
   });
 
   final ApiConfig cfg;
@@ -49,6 +51,9 @@ class AgentRunner {
 
   /// 重试/等待类状态：只更新顶部进度条，不往对话里插气泡（否则每条都出现两遍）
   final void Function(String? status)? onStatus;
+
+  /// 用户「停止」开关。可空：老调用点不传就是原来那种跑完为止的行为。
+  final CancelToken? cancel;
 
   /// 文本协议提示只说一次
   bool _toldTextProtocol = false;
@@ -166,6 +171,18 @@ class AgentRunner {
       '标签里的 JSON 必须能被 JSON.parse；一次只发一个工具，等结果回来再决定下一步。'
       '禁止说「我没有终端工具」——你有，标签就是调用方式。';
 
+  /// 取消后统一收口：写一条提示、清掉状态条，让调用点直接 return。
+  ///
+  /// 刻意不抛异常：上层（chat_page）把异常当成网络故障弹红色错误条，
+  /// 用户明明是主动点的停止，不该看到「连不上模型服务」。
+  bool _stopRequested() {
+    final c = cancel;
+    if (c == null || !c.isCancelled) return false;
+    onStatus?.call(null);
+    onToolResult('⏹ 已按你的要求停止');
+    return true;
+  }
+
   Future<void> run(List<Map<String, dynamic>> messages) async {
     if (messages.isEmpty || messages.first['role'] != 'system') {
       final sys = [cfg.systemPrompt.trim(), preamble]
@@ -180,7 +197,12 @@ class AgentRunner {
     onStatus?.call(null);
     try {
       for (var step = 0; step < maxSteps; step++) {
-        final msg = await client.complete(messages, tools: Tools.specs);
+        // 每步开头先看取消：上一步工具刚跑完那一刻点的停止，不该再多发一轮请求
+        if (_stopRequested()) return;
+
+        // 停止时 HttpClient 被 close(force: true)，挂着的请求会以
+        // SocketException / HttpException 冒出来；这类异常由下面的 catch 统一收口
+        final msg = await client.complete(messages, tools: Tools.specs, cancel: cancel);
         final raw = (msg['content'] as String?) ?? '';
         final calls = msg['tool_calls'] as List?;
         final noNative = calls == null || calls.isEmpty;
@@ -201,7 +223,10 @@ class AgentRunner {
             _toldTextProtocol = true;
             onToolResult('ℹ 这个接入点不返回 tool_calls，已改用文本协议执行（功能一样）');
           }
+          // 审批弹窗可能停在这里等用户点：点「停止」时弹窗还开着，别再执行
+          if (_stopRequested()) return;
           final ok = await approve(t.name, t.args);
+          if (_stopRequested()) return;
           final sw = Stopwatch()..start();
           final out = ok ? await Tools.run(t.name, t.args) : '用户拒绝执行';
           sw.stop();
@@ -212,6 +237,9 @@ class AgentRunner {
           } else {
             onToolResult('${ok ? '▶' : '⊘'} ${t.name}\n${_brief(t.args)}\n$out');
           }
+          // 容器里的进程杀不掉（bash 可能还在跑），能立刻做到的是：
+          // 这一条跑完就不再回灌模型、不再开下一轮。结果不回灌也更安全。
+          if (_stopRequested()) return;
           messages.add({'role': 'assistant', 'content': raw});
           messages.add({'role': 'user', 'content': '[工具 ${t.name} 的输出]\n$out'});
           continue;
@@ -230,7 +258,11 @@ class AgentRunner {
           } catch (_) {
             args = {'raw': fn['arguments']};
           }
+          // 一条 assistant 消息可能带多个 tool_call：每个执行前后都要看灯，
+          // 否则用户点了停止，剩下的调用还会接着在容器里跑
+          if (_stopRequested()) return;
           final ok = await approve(name, args);
+          if (_stopRequested()) return;
           final sw = Stopwatch()..start();
           final out = ok ? await Tools.run(name, args) : '用户拒绝执行';
           sw.stop();
@@ -241,10 +273,16 @@ class AgentRunner {
           } else {
             onToolResult('${ok ? '▶' : '⊘'} $name\n${_brief(args)}\n$out');
           }
+          if (_stopRequested()) return;
           messages.add({'role': 'tool', 'tool_call_id': c['id'], 'content': out});
         }
       }
       onText('（已连跑 $maxSteps 步，先停下。发「继续」我接着跑，已完成的步骤不会重来）');
+    } catch (e) {
+      // 停止之后冒出来的任何异常（被掐断的 socket、工具被中断）都当「正常停止」处理：
+      // 写一条提示就安静退出，不再往上层抛，避免界面弹红色「连不上模型服务」
+      if (_stopRequested()) return;
+      rethrow;
     } finally {
       client.dispose();
     }
