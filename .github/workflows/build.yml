@@ -41,15 +41,6 @@ jobs:
           grep -n 'applicationId\|targetSdk\|abortOnError' android/app/build.gradle || true
           flutter pub get
 
-      # ---------- 0) 静态检查 + 测试（跑在 CI 上，因为沙箱里没有 git/完整 SDK）----------
-      - name: Analyze & test
-        working-directory: sparkshell
-        run: |
-          set -e
-          git config --global --add safe.directory "$PWD"
-          flutter analyze --no-fatal-infos --no-fatal-warnings
-          flutter test --reporter=expanded
-
       # ---------- 1) 小包：Alpine 3.6 MB，只为 30 秒验证 proot 链路 ----------
       - name: Rootfs (alpine, 3.6 MB)
         run: |
@@ -65,6 +56,15 @@ jobs:
           sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner -C /tmp/alp .
           sudo chown -R $(id -u):$(id -g) sparkshell/assets
           ls -lh sparkshell/assets/rootfs.tar
+
+      # ---------- 静态检查 + 测试：放在 rootfs 就位之后，因为 pubspec 声明了 assets/rootfs.tar ----------
+      - name: Analyze & test
+        working-directory: sparkshell
+        run: |
+          set -e
+          git config --global --add safe.directory "$PWD"
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test --reporter=expanded
 
       - name: Build APK (alpine)
         working-directory: sparkshell
