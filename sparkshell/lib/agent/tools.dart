@@ -177,8 +177,38 @@ class Tools {
     },
   ];
 
+  /// 非 bash 工具也在终端留一行痕迹：文件页/终端里能看到 AI 到底动了什么，
+  /// 否则「它说 /root 是空的」和「它真的 ls 过」看起来一样。
+  static void _trace(String name, Map<String, dynamic> a) {
+    final p = a['path'] ?? a['file'] ?? '';
+    switch (name) {
+      case 'read_file':
+        TerminalBus.instance.echoCommand('cat $p');
+        break;
+      case 'write_file':
+        TerminalBus.instance.echoCommand('write $p');
+        break;
+      case 'edit_file':
+        TerminalBus.instance.echoCommand('edit $p');
+        break;
+      case 'apply_patch':
+        TerminalBus.instance.echoCommand('patch $p');
+        break;
+      case 'list_dir':
+        TerminalBus.instance.echoCommand('ls ${p == '' ? '/' : p}');
+        break;
+      case 'search_files':
+        TerminalBus.instance.echoCommand('grep ${a['pattern'] ?? ''} ${p == '' ? '.' : p}');
+        break;
+      case 'task_log':
+        TerminalBus.instance.echoCommand('tail ${a['id'] ?? ''}.log');
+        break;
+    }
+  }
+
   static Future<String> run(String name, Map<String, dynamic> args) async {
     try {
+      if (name != 'bash') _trace(name, args);
       switch (name) {
         case 'bash':
           return _bash(args);

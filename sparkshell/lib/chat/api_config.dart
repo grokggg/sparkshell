@@ -7,9 +7,9 @@ import 'dart:io';
 /// 只有本应用能读；不写进 APK、不进 git。
 class ApiConfig {
   ApiConfig({
-    this.baseUrl = 'https://api.deepseek.com/v1',
+    this.baseUrl = 'https://api.qnaigc.com/v1',
     this.apiKey = '',
-    this.model = 'deepseek-chat',
+    this.model = 'qiniu/conatus-free',
     this.systemPrompt = '你是 SparkShell 里的工程助手。回答简洁，给可执行命令。',
     this.temperature = 0.3,
   });
@@ -54,9 +54,9 @@ class ApiConfig {
       if (!await f.exists()) return ApiConfig();
       final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
       final cfg = ApiConfig(
-        baseUrl: m['baseUrl'] as String? ?? 'https://api.deepseek.com/v1',
+        baseUrl: m['baseUrl'] as String? ?? 'https://api.qnaigc.com/v1',
         apiKey: m['apiKey'] as String? ?? '',
-        model: m['model'] as String? ?? 'deepseek-chat',
+        model: m['model'] as String? ?? 'qiniu/conatus-free',
         systemPrompt: m['systemPrompt'] as String? ?? '',
         temperature: (m['temperature'] as num?)?.toDouble() ?? 0.3,
       );

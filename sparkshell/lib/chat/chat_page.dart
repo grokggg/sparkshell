@@ -55,6 +55,8 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 终端输入条来的问题
   StreamSubscription<String>? _aiSub;
+  String? _lastAsk;
+  DateTime _lastAskAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// 把 HTTP 错误翻译成人话：免费模型 429 不是崩溃，是额度/限流。
   String _friendly(Object e) {
@@ -80,6 +82,14 @@ class _ChatPageState extends State<ChatPage> {
     AppBus.pendingChatFile.addListener(_takePendingFile);
     _aiSub = TerminalBus.instance.aiRequests.listen((q) {
       if (!mounted) return;
+      final now = DateTime.now();
+      // 连点两次发送 / 双通道回放会让同一句进来两遍，3 秒内只处理一次
+      if (q == _lastAsk && now.difference(_lastAskAt) < const Duration(seconds: 3)) {
+        TerminalBus.instance.mirror('\x1b[90m（同一条请求刚发过，已忽略重复）\x1b[0m\r\n');
+        return;
+      }
+      _lastAsk = q;
+      _lastAskAt = now;
       _input.text = q;
       if (!_agent) setState(() => _agent = true);
       _send();
@@ -247,7 +257,9 @@ class _ChatPageState extends State<ChatPage> {
     final cfg = _cfg;
     if (text.isEmpty || cfg == null || _busy) return;
     if (!cfg.ready) {
-      setState(() => _err = '还没填 API Key，点右上角设置');
+      const msg = '还没填 API Key：点 Chat 右上角齿轮，填七牛云的 key（base https://api.qnaigc.com/v1）';
+      setState(() => _err = msg);
+      TerminalBus.instance.mirror('\x1b[31m✗ $msg\x1b[0m\r\n');
       return;
     }
     _input.clear();
@@ -285,7 +297,9 @@ class _ChatPageState extends State<ChatPage> {
         _toBottom();
       },
       onError: (Object e) {
-        setState(() => _err = _friendly(e));
+        final m = _friendly(e);
+        setState(() => _err = m);
+        TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
         if (!done.isCompleted) done.complete();
       },
       onDone: () {
@@ -318,10 +332,12 @@ class _ChatPageState extends State<ChatPage> {
         if (mounted) setState(() => _msgs.add(_Msg('tool', l)));
       });
       if (script == null) {
+        const m = '容器没准备好，先去 Linux 页看一眼';
         setState(() {
           _busy = false;
-          _err = '容器没准备好，先去 Linux 页看一眼';
+          _err = m;
         });
+        TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
         return;
       }
     }
@@ -355,7 +371,11 @@ class _ChatPageState extends State<ChatPage> {
     try {
       await runner.run(history);
     } catch (e) {
-      if (mounted) setState(() => _err = _friendly(e));
+      if (mounted) {
+        final m = _friendly(e);
+        setState(() => _err = m);
+        TerminalBus.instance.mirror('\x1b[31m✗ $m\x1b[0m\r\n');
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -455,7 +475,7 @@ class _ChatPageState extends State<ChatPage> {
                 controller: base,
                 decoration: const InputDecoration(
                   labelText: 'Base URL',
-                  hintText: 'https://api.deepseek.com/v1',
+                  hintText: 'https://api.qnaigc.com/v1',
                 ),
               ),
               TextField(
@@ -467,7 +487,7 @@ class _ChatPageState extends State<ChatPage> {
                 controller: model,
                 decoration: const InputDecoration(
                   labelText: '模型',
-                  hintText: 'deepseek-chat / qwen-plus / gpt-4o-mini',
+                  hintText: 'qiniu/conatus-free',
                 ),
               ),
               TextField(

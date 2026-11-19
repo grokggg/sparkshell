@@ -5,7 +5,6 @@ import 'chat/chat_page.dart';
 import 'files/file_page.dart';
 import 'linux_env.dart';
 import 'linux_page.dart';
-import 'pty_terminal.dart';
 import 'ssh_terminal.dart';
 import 'webrtc_page.dart';
 
@@ -43,7 +42,6 @@ class _HomeState extends State<Home> {
 
   // late final：初始化时机在构造之后，才能引用实例方法 _sendToChat
   late final _pages = <Widget>[
-    const PtyTerminalPage(),
     const LinuxPage(),
     const ChatPage(),
     _FilesTab(onSendToChat: _sendToChat),
@@ -54,7 +52,7 @@ class _HomeState extends State<Home> {
   /// 文件页长按「发给 Agent」：把路径交给 Chat，再切到 Chat 页。
   void _sendToChat(String path) {
     AppBus.pendingChatFile.value = path;
-    setState(() => _idx = 2);
+    setState(() => _idx = 1);
   }
 
   @override
@@ -64,7 +62,7 @@ class _HomeState extends State<Home> {
         title: const Row(children: [
           Text('SparkShell'),
           SizedBox(width: 8),
-          Text('v2.1.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          Text('v2.2.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
         ]),
         centerTitle: false,
       ),
@@ -73,7 +71,6 @@ class _HomeState extends State<Home> {
         selectedIndex: _idx,
         onDestinationSelected: (i) => setState(() => _idx = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.terminal), label: 'PTY'),
           NavigationDestination(icon: Icon(Icons.computer), label: 'Linux'),
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
           NavigationDestination(icon: Icon(Icons.folder_outlined), label: '文件'),

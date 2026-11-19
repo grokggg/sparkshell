@@ -95,7 +95,53 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
     if (mounted) setState(() => _installing = false);
   }
 
-  /// 终端里的 AI 输入条：问题交给 Chat 的 Agent，回答会同步镜像回这块屏幕。
+  /// 点 ✨ 弹一行输入：问题交给 Chat 的 Agent，回答同步镜像回这块屏幕。
+  /// 不再常驻一个大输入框——一个页面只留终端 + 一行按钮，视觉上不打架。
+  void _promptAi() {
+    _ai.clear();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0E1526),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 12,
+          right: 12,
+          top: 12,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 12,
+        ),
+        child: Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _ai,
+              autofocus: true,
+              style: const TextStyle(fontSize: 14),
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) {
+                _askAi();
+                Navigator.of(ctx).pop();
+              },
+              decoration: const InputDecoration(
+                isDense: true,
+                prefixIcon: Icon(Icons.auto_awesome, size: 18),
+                hintText: '让 AI 干活：装 python3 / 看看 /root / 写个脚本…',
+                hintStyle: TextStyle(fontSize: 12),
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          IconButton(
+            onPressed: () {
+              _askAi();
+              Navigator.of(ctx).pop();
+            },
+            icon: const Icon(Icons.send),
+          ),
+        ]),
+      ),
+    );
+  }
+
   void _askAi() {
     final q = _ai.text.trim();
     if (q.isEmpty) return;
@@ -161,38 +207,18 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
                 ),
                 const SizedBox(width: 8),
               ],
+              if (_fd >= 0)
+                IconButton(
+                  tooltip: '问 AI（在同一个终端里干活）',
+                  onPressed: _promptAi,
+                  icon: const Icon(Icons.auto_awesome, size: 20),
+                ),
               FilledButton.tonal(
                 onPressed: _fd >= 0 ? null : _start,
                 child: const Text('启动 PTY'),
               ),
             ],
           ),
-        ),
-        Container(
-          color: const Color(0xFF0B1220),
-          padding: const EdgeInsets.fromLTRB(8, 6, 4, 0),
-          child: Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _ai,
-                style: const TextStyle(fontSize: 13),
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => _askAi(),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  prefixIcon: Icon(Icons.auto_awesome, size: 16),
-                  hintText: '问 AI：装个 python3，跑一下 hello.py…',
-                  hintStyle: TextStyle(fontSize: 12),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ),
-            IconButton(
-              tooltip: '发给 AI',
-              onPressed: _askAi,
-              icon: const Icon(Icons.send, size: 18),
-            ),
-          ]),
         ),
         Container(
           color: const Color(0xFF0B1220),

@@ -108,12 +108,20 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.0-apk
-          name: SparkShell 2.1.0 (一个入口：终端 + AI 合体)
+          tag_name: v2.2.0-apk
+          name: SparkShell 2.2.0 (默认七牛云 + 界面收敛)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.2.0 — 默认七牛云 · 界面收敛**
+            - 默认接入点改为七牛云 Conatus：`https://api.qnaigc.com/v1` / `qiniu/conatus-free`，重装不用再手动改
+            - 去掉重复的 PTY 页（Linux 页本身就是容器里的 PTY），6 个 Tab → 5 个
+            - 终端页不再常驻大输入框：改成右上角 ✨，点开才弹一行输入，页面只剩终端 + 一行按钮
+            - AI 的失败原因（没填 Key / 限流 / 网关超时）直接红字打在终端里，不再"点了没反应"
+            - AI 调 list_dir / read_file / write_file / edit_file / patch / grep 都会在终端留一行 `▶ AI` 痕迹
+            - 终端里同一句话 3 秒内只发一次，避免连点两下得到两份回答
+
             **2.1.0 — 一个入口**
             - 终端顶部新增 AI 输入条：在 Linux 页直接提问，Chat 里的 Agent 接单，回答和工具输出都镜像回同一块屏幕
             - AI 执行命令时终端里出现青色 `▶ AI` 徽标 + 命令原文，输出暗灰缩进回灌，不再是黑箱
