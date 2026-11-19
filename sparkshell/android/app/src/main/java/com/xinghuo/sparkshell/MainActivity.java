@@ -1,9 +1,11 @@
 package com.xinghuo.sparkshell;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -11,6 +13,7 @@ import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.FileProvider;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -31,6 +34,7 @@ import io.flutter.plugin.common.MethodChannel;
 /**
  * 极简宿主。
  *  - PTY 通道：open/read/write/close（native 实现在 pty_bridge.c）
+ *  - IO 通道：pickAndImport / exportFile（Activity Result）+ installApk（拉起系统安装器）
  *  - 环境准备：prepareRootfs —— 把 APK 内的 rootfs.tar 流式落盘，再用 toybox tar 解包
  *
  * prepareRootfs 返回 String：成功为 "ok"，失败为可直接打印的诊断串（含 tar 退出码/输出/剩余空间）。
@@ -108,6 +112,7 @@ public class MainActivity extends FlutterActivity {
                                 }
                                 default:
                                     result.notImplemented();
+                                    break;
                             }
                         } catch (Throwable t) {
                             result.error("pty_error", String.valueOf(t.getMessage()), null);
@@ -139,8 +144,18 @@ public class MainActivity extends FlutterActivity {
                                     }
                                     break;
                                 }
+                                case "installApk": {
+                                    String path = call.argument("path");
+                                    if (path == null || path.trim().isEmpty()) {
+                                        result.error("bad_args", "缺少 path", null);
+                                    } else {
+                                        installApk(result, path.trim());
+                                    }
+                                    break;
+                                }
                                 default:
                                     result.notImplemented();
+                                    break;
                             }
                         } catch (Throwable t) {
                             result.error("io_error", String.valueOf(t.getMessage()), null);
@@ -302,6 +317,43 @@ public class MainActivity extends FlutterActivity {
             result.success(true);
         } catch (Throwable t) {
             result.error("export_failed", String.valueOf(t.getMessage()), null);
+        }
+    }
+
+    /**
+     * 拉起系统安装器。文件在 filesDir/updates 下，属于私有目录，
+     * 必须先经 FileProvider 转成 content:// URI 并授予读权限，否则安装器读不到。
+     *
+     * 权限：Android 8.0+ 用 canRequestPackageInstalls() 判断「安装未知来源应用」，
+     * 没开就回 need_install_permission，让 UI 引导用户去设置页。
+     * targetSdk=28 不变 —— 这条路径不依赖 targetSdk。
+     */
+    private void installApk(MethodChannel.Result result, String path) {
+        try {
+            File apk = new File(path);
+            if (!apk.isFile()) {
+                result.error("not_found", "安装包不存在: " + path, null);
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                    && !getPackageManager().canRequestPackageInstalls()) {
+                result.error("need_install_permission",
+                        "未授予「安装未知应用」权限，请在系统设置里允许 SparkShell 安装应用", null);
+                return;
+            }
+            Uri uri = FileProvider.getUriForFile(
+                    getApplicationContext(),
+                    BuildConfig.APPLICATION_ID + ".fileprovider",
+                    apk);
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            result.success(true);
+        } catch (ActivityNotFoundException e) {
+            result.error("no_installer", "系统里没有可用的安装器（可能被停用）", null);
+        } catch (Throwable t) {
+            result.error("install_failed", "调起安装器失败: " + t.getMessage(), null);
         }
     }
 

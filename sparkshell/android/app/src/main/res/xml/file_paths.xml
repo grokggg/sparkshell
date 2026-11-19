@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
+    <!-- 导出文件：cacheDir/exports -->
     <cache-path name="exports" path="exports/" />
+    <!-- 应用内更新下载的 APK：filesDir/updates（系统安装器要读） -->
+    <files-path name="updates" path="updates/" />
+    <!-- 兜底：若以后把下载目录挪到 cacheDir/updates 也能授权 -->
+    <cache-path name="cache_updates" path="updates/" />
 </paths>

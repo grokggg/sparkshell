@@ -54,11 +54,19 @@ class H(BaseHTTPRequestHandler):
                     return
                 code = 206
         self.send_response(code)
-        self.send_header("Content-Type", "application/vnd.android.package-archive")
+        ext = os.path.splitext(full)[1].lower()
+        ctype = {
+            ".json": "application/json; charset=utf-8",
+            ".txt": "text/plain; charset=utf-8",
+            ".md": "text/markdown; charset=utf-8",
+        }.get(ext, "application/vnd.android.package-archive")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Disposition",
-                         'attachment; filename="%s"' % os.path.basename(full))
+        # 清单类文件要能直接读，别逼客户端下载
+        if ext not in (".json", ".txt", ".md"):
+            self.send_header("Content-Disposition",
+                             'attachment; filename="%s"' % os.path.basename(full))
         if code == 206:
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
         self.end_headers()

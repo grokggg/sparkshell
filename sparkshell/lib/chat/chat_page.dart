@@ -10,6 +10,9 @@ import '../agent/cancel_token.dart';
 import '../app_bus.dart';
 import '../linux_env.dart';
 import '../agent/tools.dart';
+import '../app_version.dart';
+import '../skills/skill_tools.dart';
+import '../update/updater.dart';
 import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
@@ -654,6 +657,143 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// 把当前对话导出成 JSON，落在容器的 /root/share 下，用文件页「导出」就能拿到手机里。
+
+  // ---- 更新与技能：都放在右上角「更多」里，不占主界面 ----
+
+  /// 检查更新 → 下载（带进度、校验 sha256）→ 拉起系统安装器。
+  Future<void> _checkUpdate() async {
+    final Updater up = Updater();
+    UpdateInfo? info;
+    var started = false;
+    String status = '正在检查…';
+    String? error;
+    double progress = 0;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Future<void> check() async {
+            setS(() {
+              status = '正在检查…';
+              error = null;
+            });
+            try {
+              final UpdateInfo? got = await up.check(
+                currentVersion: appVersion,
+                currentCode: appCode,
+              );
+              setS(() {
+                info = got;
+                status = got == null ? '已经是最新版本（$appVersion）' : '发现新版本 ${got.version}';
+              });
+            } catch (e) {
+              setS(() {
+                error = '$e';
+                status = '检查失败';
+              });
+            }
+          }
+
+          Future<void> pull() async {
+            final UpdateInfo target = info!;
+            setS(() {
+              status = '正在下载 ${(target.size / 1048576).toStringAsFixed(1)} MB…';
+              progress = 0;
+            });
+            try {
+              final String path = await up.download(
+                target,
+                onProgress: (v) => setS(() => progress = v),
+              );
+              final DownloadReport? rep = up.lastDownload;
+              setS(() {
+                status = rep != null && rep.verified
+                    ? '下载完成，sha256 校验通过，正在唤起安装器…'
+                    : '下载完成（未校验 sha256），正在唤起安装器…';
+              });
+              final bool ok = await up.install(path);
+              if (!mounted) return;
+              setS(() => status = ok ? '安装器已打开，按系统提示完成安装' : '安装器没有打开');
+            } catch (e) {
+              setS(() => error = '$e');
+            }
+          }
+
+          // 首帧就自动查一次，用户不用先点「重试」
+          if (!started) {
+            started = true;
+            Future<void>.microtask(check);
+          }
+
+          final bool hasUpdate = info != null;
+          return AlertDialog(
+            title: Text(status),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('当前版本 $appVersion（$appCode）', style: const TextStyle(fontSize: 12, color: Color(0xFF5B6884))),
+                if (hasUpdate && (info!.notes).isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 160),
+                    child: SingleChildScrollView(
+                      child: Text(info!.notes, style: const TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                ],
+                if (progress > 0 && progress < 1) ...[
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(value: progress),
+                ],
+                if (error != null) ...[
+                  const SizedBox(height: 8),
+                  Text(error!, style: const TextStyle(fontSize: 12, color: Color(0xFFC0392B))),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('关闭')),
+              if (error != null || (!hasUpdate && info == null))
+                TextButton(onPressed: check, child: const Text('重试')),
+              if (hasUpdate)
+                FilledButton(onPressed: pull, child: Text('下载并安装 ${info!.version}')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  /// 技能库：看看现在装了哪些，点开能读正文。目录可直接从文件页翻。
+  Future<void> _showSkills() async {
+    String text;
+    try {
+      final s = await SkillTools.store();
+      if (s.all.isEmpty) {
+        text = '还没有技能。\n\n目录：${s.dir}/skills\n'
+            '新建 <名字>/SKILL.md，开头写：\n---\nname: 起名\ndescription: 一句话\n---\n'
+            '然后正文写步骤。放进去就能用，AI 会通过 skill_list 看到它。';
+      } else {
+        text = s.all
+            .map((e) => '${e.name}\n  ${e.description}\n  ${e.allowedTools.isEmpty ? "工具不限" : e.allowedTools.join(", ")}')
+            .join('\n\n');
+      }
+    } catch (e) {
+      text = '读技能库失败：$e';
+    }
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('已装技能'),
+        content: SingleChildScrollView(child: Text(text, style: const TextStyle(fontSize: 12.5))),
+        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('知道了'))],
+      ),
+    );
+  }
+
   Future<void> _exportSession() async {
     final root = LinuxEnv.instance.rootfsPath;
     if (root == null) {
@@ -900,6 +1040,18 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: () => setState(() => _agent = !_agent),
                 icon: Icon(_agent ? Icons.smart_toy : Icons.smart_toy_outlined, size: 20),
                 color: _agent ? const Color(0xFF7DE2D1) : null,
+              ),
+              PopupMenuButton<String>(
+                tooltip: '更多',
+                icon: const Icon(Icons.more_horiz, size: 20),
+                onSelected: (v) {
+                  if (v == 'update') _checkUpdate();
+                  if (v == 'skills') _showSkills();
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'update', child: Text('检查更新')),
+                  PopupMenuItem(value: 'skills', child: Text('已装技能')),
+                ],
               ),
               IconButton(
                 onPressed: _settings,

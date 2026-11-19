@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../linux_env.dart';
 import '../term/terminal_bus.dart';
+import '../skills/skill_tools.dart';
 import '../ssh/ssh_exec.dart';
 import 'task_store.dart';
 
@@ -202,6 +203,7 @@ class Tools {
         },
       },
     },
+    ...SkillTools.specs,
   ];
 
   /// 非 bash 工具也在终端留一行痕迹：文件页/终端里能看到 AI 到底动了什么，
@@ -261,6 +263,9 @@ class Tools {
           return await _sshHosts();
         case 'ssh_exec':
           return await _sshExec(args);
+        case 'skill_list':
+        case 'skill_read':
+          return await SkillTools.run(name, args);
         default:
           return '未知工具: $name';
       }

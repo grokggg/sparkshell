@@ -6,6 +6,7 @@ import 'files/file_page.dart';
 import 'linux_env.dart';
 import 'linux_page.dart';
 import 'ssh_terminal.dart';
+import 'app_version.dart';
 import 'webrtc/remote_page.dart';
 
 void main() => runApp(const SparkShellApp());
@@ -62,7 +63,7 @@ class _HomeState extends State<Home> {
         title: const Row(children: [
           Text('SparkShell'),
           SizedBox(width: 8),
-          Text('v2.9.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          Text('v$appVersion', style: TextStyle(fontSize: 12, color: Colors.white70)),
         ]),
         centerTitle: false,
       ),

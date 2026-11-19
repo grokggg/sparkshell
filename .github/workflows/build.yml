@@ -108,12 +108,19 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.9.0-apk
-          name: SparkShell 2.9.0 (AI 能管服务器 + 远程终端)
+          tag_name: v3.0.0-apk
+          name: SparkShell 3.0.0 (技能库 + 应用内更新)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.0.0 — 技能库 + 应用内更新**
+            - 技能系统：`<filesDir>/skills/<名字>/SKILL.md` 放进去就生效，AI 用 `skill_list` / `skill_read` 按需读，不把说明书全塞进 system
+            - 右上角「更多 → 已装技能」能看当前装了哪些，不用连电脑
+            - 应用内更新：检查 latest.json（隧道）→ 解析版本 → 下载带进度 → sha256 校验 → 拉起系统安装器
+            - 版本号收敛到 lib/app_version.dart 一处，避免 pubspec/标题/更新检查三处漂移
+            - test/updater_selfcheck_test.dart 自带 fixture HTTP 服务，`flutter test` 18 条全过，不再依赖外部 python 服务
+
             **2.9.0 — AI 能管服务器 + 远程终端**
             - 新增工具 `ssh_hosts` / `ssh_exec`：AI 直接在已保存的 SSH 主机上执行命令，输出同时镜像到终端
             - WebRTC 从自检升级成「远程终端」：两台手机配对后 A 操作 B 的容器终端，信令走 Cloudflare 隧道的 `/rtc`
