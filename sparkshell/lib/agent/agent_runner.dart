@@ -6,6 +6,23 @@ import 'tools.dart';
 
 typedef Approve = Future<bool> Function(String name, Map<String, dynamic> args);
 
+/// 一次工具调用的结构化结果：给 UI 渲染成「图标 + 中文动词 + 参数 + 耗时」的一行。
+class ToolEvent {
+  ToolEvent({
+    required this.name,
+    required this.args,
+    required this.output,
+    required this.ok,
+    required this.ms,
+  });
+
+  final String name;
+  final Map<String, dynamic> args;
+  final String output;
+  final bool ok;
+  final int ms;
+}
+
 /// 工具循环：模型要工具 → 人审批 → 容器里执行 → 结果回灌 → 再来一轮。
 ///
 /// 刻意用非流式：tool_calls 必须完整拿到才能执行，逐帧解析只增风险不增体验。
@@ -16,6 +33,7 @@ class AgentRunner {
     required this.onText,
     required this.onToolResult,
     required this.approve,
+    this.onTool,
     this.maxSteps = 12,
     this.onStatus,
   });
@@ -23,6 +41,9 @@ class AgentRunner {
   final ApiConfig cfg;
   final void Function(String text) onText;
   final void Function(String rendered) onToolResult;
+
+  /// 结构化工具事件（渲染成一行的那个）；不给就退回纯文本 onToolResult
+  final void Function(ToolEvent e)? onTool;
   final Approve approve;
   final int maxSteps;
 
@@ -77,8 +98,16 @@ class AgentRunner {
             args = {'raw': fn['arguments']};
           }
           final ok = await approve(name, args);
+          final sw = Stopwatch()..start();
           final out = ok ? await Tools.run(name, args) : '用户拒绝执行';
-          onToolResult('${ok ? '▶' : '⊘'} $name\n${_brief(args)}\n$out');
+          sw.stop();
+          final cb = onTool;
+          if (cb != null) {
+            cb(ToolEvent(
+                name: name, args: args, output: out, ok: ok, ms: sw.elapsedMilliseconds));
+          } else {
+            onToolResult('${ok ? '▶' : '⊘'} $name\n${_brief(args)}\n$out');
+          }
           messages.add({'role': 'tool', 'tool_call_id': c['id'], 'content': out});
         }
       }

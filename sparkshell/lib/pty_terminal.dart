@@ -67,7 +67,8 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
       if (!mounted) return;
       setState(() {
         _fd = fd ?? -1;
-        _status = _fd >= 0 ? 'fd=$_fd  $shell' : '打开失败';
+        final short = shell.split('/').last;
+        _status = _fd >= 0 ? 'fd=$_fd  $short' : '打开失败';
       });
       _term.write('\r\n[sparkshell] pty opened, fd=$_fd\r\n');
       // AI 的动作从这里流进终端屏幕：一个入口，不再两套世界
@@ -195,8 +196,16 @@ class _PtyTerminalPageState extends State<PtyTerminalPage> {
           child: Row(
             children: [
               Expanded(
-                child: Text(_status,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF9AA7C7))),
+                child: Tooltip(
+                  message: _status,
+                  child: Text(
+                    _status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF9AA7C7)),
+                  ),
+                ),
               ),
               if (widget.toolchainCommand != null && _fd >= 0) ...[
                 OutlinedButton.icon(

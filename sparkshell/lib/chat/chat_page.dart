@@ -10,6 +10,7 @@ import '../app_bus.dart';
 import '../linux_env.dart';
 import '../term/terminal_bus.dart';
 import 'tool_card.dart';
+import 'tool_row.dart';
 import 'api_config.dart';
 import 'llm_client.dart';
 import 'session_store.dart';
@@ -22,9 +23,16 @@ class ChatPage extends StatefulWidget {
 }
 
 class _Msg {
-  _Msg(this.role, this.text);
-  final String role; // user | assistant
+  _Msg(this.role, this.text, {this.tool, this.args, this.ok = true, this.ms = 0});
+
+  final String role; // user | assistant | tool
   String text;
+
+  /// 非空表示这是一条结构化工具调用（渲染成一行），空则是普通提示文字
+  final String? tool;
+  final Map<String, dynamic>? args;
+  final bool ok;
+  final int ms;
 }
 
 class _ChatPageState extends State<ChatPage> {
@@ -367,6 +375,12 @@ class _ChatPageState extends State<ChatPage> {
               '\x1b[35m🤖\x1b[0m ${flat.length > 400 ? '${flat.substring(0, 400)}…' : flat}\r\n');
         }
       },
+      onTool: (e) {
+        if (!mounted) return;
+        setState(() => _msgs.add(_Msg('tool', e.output,
+            tool: e.name, args: e.args, ok: e.ok, ms: e.ms)));
+        _toBottom();
+      },
       onToolResult: (t) {
         if (!mounted) return;
         setState(() => _msgs.add(_Msg('tool', t)));
@@ -699,6 +713,37 @@ class _ChatPageState extends State<ChatPage> {
                   itemBuilder: (_, i) {
                     final m = _msgs[i];
                     final mine = m.role == 'user';
+                    if (m.tool != null) {
+                      // 一次提问里的连续工具调用归成一组，头上一行「已完成 · N 次工具调用」
+                      final head = i == 0 || _msgs[i - 1].tool == null;
+                      var n = 0;
+                      if (head) {
+                        for (var k = i; k < _msgs.length && _msgs[k].tool != null; k++) {
+                          n++;
+                        }
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (head && n > 1)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                              child: Text('已完成 · $n 次工具调用',
+                                  style: const TextStyle(fontSize: 11, color: Color(0xFF6B7899))),
+                            ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            child: ToolRow(
+                              name: m.tool!,
+                              args: m.args ?? const {},
+                              output: m.text,
+                              ok: m.ok,
+                              ms: m.ms,
+                            ),
+                          ),
+                        ],
+                      );
+                    }
                     return Align(
                       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                       child: Container(

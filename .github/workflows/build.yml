@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.3.0-apk
-          name: SparkShell 2.3.0 (抗抖动：流式自动降级)
+          tag_name: v2.4.0-apk
+          name: SparkShell 2.4.0 (工具调用像 dsh go 那样一行一条)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.4.0 — 工具调用一行一条**
+            - Chat 里工具不再是原始 JSON 卡片：图标 + 中文动词（跑命令/读取/写入/编辑/列目录/查找）+ 参数摘要 + 耗时
+            - 点该行看完整输出，长输出再点开也不刷屏
+            - 同一次提问的连续工具调用上方显示「已完成 · N 次工具调用」
+            - 终端顶部状态行不再被长路径折成竖条：只显示 `fd=165  start.sh`，长按看全路径
+
             **2.3.0 — 抗抖动**
             - 重试提示不再重复两遍：只留在顶部琥珀条，Agent 不再往对话里插 ⏳ 气泡
             - 流式被中转掐断时自动改用整段返回，**同一接入点、同一模型**，只换传输方式
