@@ -11,6 +11,7 @@ import '../app_bus.dart';
 import '../linux_env.dart';
 import '../agent/tools.dart';
 import '../app_version.dart';
+import '../skills/skill_store.dart';
 import '../skills/skill_tools.dart';
 import '../update/updater.dart';
 import '../term/terminal_bus.dart';
@@ -766,33 +767,74 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  /// 技能库：看看现在装了哪些，点开能读正文。目录可直接从文件页翻。
+  /// 技能库：看看现在装了哪些；空库时一键放个示例，省得用户自己拼 frontmatter。
   Future<void> _showSkills() async {
     String text;
+    SkillStore? store;
     try {
-      final s = await SkillTools.store();
-      if (s.all.isEmpty) {
-        text = '还没有技能。\n\n目录：${s.dir}/skills\n'
-            '新建 <名字>/SKILL.md，开头写：\n---\nname: 起名\ndescription: 一句话\n---\n'
-            '然后正文写步骤。放进去就能用，AI 会通过 skill_list 看到它。';
-      } else {
-        text = s.all
-            .map((e) => '${e.name}\n  ${e.description}\n  ${e.allowedTools.isEmpty ? "工具不限" : e.allowedTools.join(", ")}')
-            .join('\n\n');
-      }
+      final SkillStore s = await SkillTools.store();
+      store = s;
+      text = s.all.isEmpty
+          ? '还没有技能。\n\n目录：${s.dir}\n'
+              '每个技能就是一个目录里的 SKILL.md，开头写 name / description，正文写步骤。\n'
+              '放进去立刻生效，AI 用 skill_list 就能看到——不用重装。'
+          : s.all
+              .map((e) => '${e.name}\n  ${e.description}\n  ${e.allowedTools.isEmpty ? "工具不限" : e.allowedTools.join(", ")}')
+              .join('\n\n');
     } catch (e) {
       text = '读技能库失败：$e';
     }
     if (!mounted) return;
+    final bool empty = store != null && store.all.isEmpty;
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('已装技能'),
         content: SingleChildScrollView(child: Text(text, style: const TextStyle(fontSize: 12.5))),
-        actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('知道了'))],
+        actions: [
+          if (empty)
+            TextButton(
+              onPressed: () async {
+                try {
+                  await store!.install('debian-toolchain', _sampleSkill); // empty==true 时 store 必非空
+                  if (!mounted) return;
+                  Navigator.of(ctx).pop();
+                  await _showSkills();
+                } catch (e) {
+                  if (!mounted) return;
+                  Navigator.of(ctx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('放入失败：$e')));
+                }
+              },
+              child: const Text('放入示例技能'),
+            ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('知道了')),
+        ],
       ),
     );
   }
+
+  /// 示例技能：不是凑数，是示范「给模型写说明书」的正确颗粒度——
+  /// 先判发行版，再装，最后自检；这三步不写清，模型就会在 Alpine 上敲 apt-get。
+  static const String _sampleSkill = '''
+---
+name: debian-toolchain
+description: 在容器里装 python3/git/curl，先判发行版再选包管理器，装完自检
+allowed-tools: bash, read_file
+tags: debian, alpine, toolchain
+---
+
+# 装工具链
+
+1. 先确认发行版，不要猜：
+   \`grep ^ID= /etc/os-release\`
+   - `ID=alpine` → `apk add --no-cache python3 git curl`
+   - `ID=debian` → `apt-get update && apt-get install -y python3 git curl`
+2. 注意：Alpine 上 `command -v apt-get` 有时能命中空壳，判定只看 os-release。
+3. 装完必须自检，三条都要有输出：
+   \`python3 -V && git --version && curl --version | head -1\`
+4. 如果 apk/apt 报 trigger 相关噪音，不影响使用，把真实错误行挑出来再判断。
+''';
 
   Future<void> _exportSession() async {
     final root = LinuxEnv.instance.rootfsPath;

@@ -48,11 +48,11 @@ class SkillTools {
     final SkillStore s = await store();
     if (name == 'skill_list') {
       if (s.all.isEmpty) {
-        return '技能库是空的。目录：${s.dir}/skills\n'
+        return '技能库是空的。目录：${s.dir}\n'
             '放一个 <名字>/SKILL.md（开头写 ---\\nname: ...\\ndescription: ...\\n---）就能用。';
       }
       final String lines = s.all.map((e) => '- ${e.oneLine}').join('\n');
-      return '共 ${s.all.length} 个技能（目录 ${s.dir}/skills）：\n$lines\n\n要哪份细节就 skill_read。';
+      return '共 ${s.all.length} 个技能（目录 ${s.dir}）：\n$lines\n\n要哪份细节就 skill_read。';
     }
     if (name == 'skill_read') {
       final String want = (args['name'] as String? ?? '').trim();

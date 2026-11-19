@@ -108,12 +108,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.0.0-apk
-          name: SparkShell 3.0.0 (技能库 + 应用内更新)
+          tag_name: v3.0.1-apk
+          name: SparkShell 3.0.1 (技能目录提示修正)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.0.1 — 技能目录提示修正**
+            - 修：技能空库提示写成 `.../files/skills/skills`，按它放文件 AI 永远扫不到
+            - 加：空库一键「放入示例技能」（debian-toolchain，示范正确颗粒度）
+            - 加：`skill_path_test.dart` 断言提示路径 == store.dir 且不含重复 skills
+
             **3.0.0 — 技能库 + 应用内更新**
             - 技能系统：`<filesDir>/skills/<名字>/SKILL.md` 放进去就生效，AI 用 `skill_list` / `skill_read` 按需读，不把说明书全塞进 system
             - 右上角「更多 → 已装技能」能看当前装了哪些，不用连电脑
