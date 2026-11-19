@@ -117,12 +117,15 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.3.0-apk
-          name: SparkShell 3.3.0 (proot 对齐 + 附件导入加固)
+          tag_name: v3.3.1-apk
+          name: SparkShell 3.3.1 (proot loader 走环境变量)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.3.1 — loader 改走 PROOT_LOADER 环境变量**
+            - 改：`PROOT_LOADER` / `PROOT_LOADER_32` 进环境，换 proot 二进制不必再改字节（dsh-go 同样做法，其 libproot.so 里仍留 Termux 路径）
+
             **3.3.0 — 按 dsh-go 逆向资料对齐 proot；附件导入加固**
             - 改：交互式终端启动加 `--kill-on-exit`（依据 libproot.so 伪代码 0x1167cc/0x127018），关终端不再留容器进程
             - 守：一次性命令**不**加该旗标，`nohup … &` 的后台任务才不会被一起杀掉（有单测钉住）

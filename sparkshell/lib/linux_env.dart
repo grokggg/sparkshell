@@ -132,6 +132,14 @@ Future<ProcessResult> execShell(String cmd, {String workdir = '/root'}) async {
         'LD_LIBRARY_PATH': '$files/proot',
         'PROOT_TMP_DIR': tmp,
         'PROOT_L2S_DIR': '$files/.l2s',
+        // 显式指定 loader，而不是靠二进制里写死的路径。
+        // dsh-go 1.0.15 的 libproot.so（sha256 68f12807…）里仍然留着
+        // /data/data/com.termux/files/usr/libexec/proot/loader，它没改字节，
+        // 而是在运行时用 PROOT_LOADER 指到自己的 libproot-loader.so。
+        // 我们之前是改字节改出来的路径，升级 proot 就得重来一遍；改成 env 之后
+        // 换二进制不用再 patch。
+        'PROOT_LOADER': '$files/proot/loader',
+        'PROOT_LOADER_32': '$files/proot/loader32',
         'PATH': '/system/bin:/system/xbin',
       },
     );
