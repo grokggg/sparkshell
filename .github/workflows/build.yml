@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.6.0-apk
-          name: SparkShell 2.6.0 (模型不返回 tool_calls 也能干活)
+          tag_name: v2.6.1-apk
+          name: SparkShell 2.6.1 (吃下模型的脏标签)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.6.1 — 吃下模型的脏标签**
+            - 上一版只认 `</tool>`，模型实际吐的是 `</arg_value>` / `</iquest_tool_call>`，所以整段被当正文显示
+            - 解析器改成「找到平衡的 JSON 就结束」，后面跟什么脏标签都当噪音，连续多个也一并吃掉
+            - 工具标签从正文里剥掉再显示，聊天里不再出现 `<tool ...>` 原文
+            - 支持 JSON 里带分号/单引号/花括号的复杂命令（按字符深度扫描，不靠正则配 `}`）
+
             **2.6.0 — 不会调工具的模型也能干活**
             - 根因：七牛云 conatus-free 这类免费接入点常常不返回 `tool_calls`，模型就误以为自己"没有终端工具"
             - 新增文本协议：模型输出 `<tool name="bash">{"command":"..."}</tool>` 即被解析执行，结果回灌后继续下一步
