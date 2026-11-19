@@ -660,11 +660,15 @@ class _ChatPageState extends State<ChatPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(req.reason),
-        subtitle: Text(name, style: const TextStyle(fontSize: 11, color: Colors.grey)),
         content: SingleChildScrollView(
-          child: Text(
-            body.length > 600 ? '${body.substring(0, 600)}…' : body,
-            style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(name, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              const SizedBox(height: 6),
+              Text(body, style: const TextStyle(fontSize: 12, fontFamily: 'monospace')),
+            ],
           ),
         ),
         actions: [

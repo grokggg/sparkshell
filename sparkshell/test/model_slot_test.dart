@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sparkshell/chat/api_config.dart';
@@ -26,12 +27,18 @@ void main() {
     });
   });
 
-  test('visionModel 能存能读，老配置缺字段不炸', () {
-    final c = ApiConfig(baseUrl: 'u', apiKey: 'k', model: 'm', visionModel: 'vl');
-    final back = ApiConfig.fromJson(jsonDecode(jsonEncode(c.toJson())) as Map<String, dynamic>);
-    expect(back.visionModel, 'vl');
+  test('visionModel 能落盘再读回来，老配置缺字段不炸', () async {
+    final dir = Directory.systemTemp.createTempSync('cfg');
+    addTearDown(() => dir.deleteSync(recursive: true));
 
-    final old = Map<String, dynamic>.from(c.toJson())..remove('visionModel');
-    expect(ApiConfig.fromJson(old).visionModel, '');
+    final c = ApiConfig(baseUrl: 'u', apiKey: 'k', model: 'm', visionModel: 'vl')..filesDir = dir.path;
+    await c.save(dir.path);
+    expect((await ApiConfig.load(dir.path)).visionModel, 'vl');
+
+    // 老版本写下的配置文件没有这个键，读的时候必须给空串而不是抛异常
+    final f = File('${dir.path}/chat_config.json');
+    final m = jsonDecode(f.readAsStringSync()) as Map<String, dynamic>..remove('visionModel');
+    f.writeAsStringSync(jsonEncode(m));
+    expect((await ApiConfig.load(dir.path)).visionModel, '');
   });
 }
