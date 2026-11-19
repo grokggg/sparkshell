@@ -2,6 +2,7 @@ import 'dart:io';
 
 import '../linux_env.dart';
 import '../term/terminal_bus.dart';
+import '../ssh/ssh_exec.dart';
 import 'task_store.dart';
 
 /// Agent 可用的四个动作。全部作用在 proot 容器里，宿主目录不暴露。
@@ -175,6 +176,32 @@ class Tools {
         },
       },
     },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'ssh_hosts',
+        'description': '列出用户在 SSH 页保存过的主机（别名、地址、认证方式）。要用远程机器前先看一眼有哪些。',
+        'parameters': {'type': 'object', 'properties': {}},
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'ssh_exec',
+        'description': '在已保存的 SSH 主机上执行一条命令，返回 stdout/stderr 和退出码。'
+            '适合管服务器：看服务状态、查日志、重启进程。'
+            '别名来自 ssh_hosts；不传 host 就必须传 alias。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'alias': {'type': 'string', 'description': '已保存主机的别名，如 root@1.2.3.4:22'},
+            'command': {'type': 'string', 'description': '要执行的远程命令'},
+            'timeout': {'type': 'integer', 'description': '秒，默认 60，最大 300'},
+          },
+          'required': ['alias', 'command'],
+        },
+      },
+    },
   ];
 
   /// 非 bash 工具也在终端留一行痕迹：文件页/终端里能看到 AI 到底动了什么，
@@ -230,6 +257,10 @@ class Tools {
           return _taskList();
         case 'todo':
           return _todo(args);
+        case 'ssh_hosts':
+          return await _sshHosts();
+        case 'ssh_exec':
+          return await _sshExec(args);
         default:
           return '未知工具: $name';
       }
@@ -543,5 +574,38 @@ class Tools {
       }
     }
     return File('$root/${parts.join('/')}');
+  }
+
+  /// 远程执行：真连 SSH，不是模拟。密钥/密码都由 SshHostStore 里存的配置决定。
+  static Future<String> _sshHosts() async {
+    final list = await SshExec().aliases();
+    if (list.isEmpty) {
+      return '还没有保存的 SSH 主机。让用户去 SSH 页连一次，连上后点「保存主机」。';
+    }
+    return '已保存 ${list.length} 台：\n${list.map((e) => '- $e').join('\n')}';
+  }
+
+  static Future<String> _sshExec(Map<String, dynamic> a) async {
+    final alias = (a['alias'] as String? ?? '').trim();
+    final cmd = (a['command'] as String? ?? '').trim();
+    if (alias.isEmpty) return '缺少 alias（先用 ssh_hosts 看有哪些主机）';
+    if (cmd.isEmpty) return '缺少 command';
+    var t = (a['timeout'] as num?)?.toInt() ?? 60;
+    if (t < 5) t = 5;
+    if (t > 300) t = 300;
+
+    TerminalBus.instance.echoCommand('ssh $alias: $cmd');
+    final sw = Stopwatch()..start();
+    try {
+      final r = await SshExec().execOnSaved(alias, cmd, timeoutSeconds: t);
+      sw.stop();
+      // 输出也镜像进终端，用户在 Linux 页能直接看到远程结果
+      TerminalBus.instance.echoResult('${r.stdout}${r.stderr}');
+      return r.brief;
+    } on SshException catch (e) {
+      sw.stop();
+      TerminalBus.instance.echoResult('ssh 失败: ${e.message}');
+      return 'SSH 失败: ${e.message}';
+    }
   }
 }

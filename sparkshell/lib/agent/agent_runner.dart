@@ -246,7 +246,7 @@ class AgentRunner {
         }
 
         // 走到这里说明原生 tool_calls 存在（noNative 分支已 return/continue）
-        final nativeCalls = calls!;
+        final nativeCalls = calls;
         messages.add({'role': 'assistant', 'content': raw.trim(), 'tool_calls': nativeCalls});
         for (final rc in nativeCalls) {
           final c = rc as Map;

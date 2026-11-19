@@ -6,7 +6,7 @@ import 'files/file_page.dart';
 import 'linux_env.dart';
 import 'linux_page.dart';
 import 'ssh_terminal.dart';
-import 'webrtc_page.dart';
+import 'webrtc/remote_page.dart';
 
 void main() => runApp(const SparkShellApp());
 
@@ -46,7 +46,7 @@ class _HomeState extends State<Home> {
     const ChatPage(),
     _FilesTab(onSendToChat: _sendToChat),
     const SshTerminalPage(),
-    const WebRtcPage(),
+    const RtcRemotePage(),
   ];
 
   /// 文件页长按「发给 Agent」：把路径交给 Chat，再切到 Chat 页。
@@ -62,7 +62,7 @@ class _HomeState extends State<Home> {
         title: const Row(children: [
           Text('SparkShell'),
           SizedBox(width: 8),
-          Text('v2.8.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          Text('v2.9.0', style: TextStyle(fontSize: 12, color: Colors.white70)),
         ]),
         centerTitle: false,
       ),
@@ -75,7 +75,7 @@ class _HomeState extends State<Home> {
           NavigationDestination(icon: Icon(Icons.chat_bubble_outline), label: 'Chat'),
           NavigationDestination(icon: Icon(Icons.folder_outlined), label: '文件'),
           NavigationDestination(icon: Icon(Icons.dns_outlined), label: 'SSH'),
-          NavigationDestination(icon: Icon(Icons.wifi_tethering), label: 'WebRTC'),
+          NavigationDestination(icon: Icon(Icons.wifi_tethering), label: '远程'),
         ],
       ),
     );

@@ -1,30 +1,20 @@
-// This is a basic Flutter widget test.
+// 冒烟测试：只验证 App 能构建出根组件和 5 个底部入口，不依赖任何原生通道
+// （pty / filesDir / SSH 都要真设备，跑在单测里会直接卡住）。
 //
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// 之前这里留着 Flutter 模板的 MyApp + 计数器断言，那个类早就不存在了，
+// 每次 analyze 都报一个 error，等于把真正的错误淹掉。
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
 
 import 'package:sparkshell/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  testWidgets('根组件可构建，底部 5 个入口齐全', (WidgetTester tester) async {
+    await tester.pumpWidget(const SparkShellApp());
+    expect(find.text('Linux'), findsOneWidget);
+    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('文件'), findsOneWidget);
+    expect(find.text('SSH'), findsOneWidget);
+    expect(find.text('远程'), findsOneWidget);
   });
 }

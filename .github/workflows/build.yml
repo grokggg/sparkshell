@@ -108,12 +108,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.8.0-apk
-          name: SparkShell 2.8.0 (SSH 可用了 + Agent 可中断)
+          tag_name: v2.9.0-apk
+          name: SparkShell 2.9.0 (AI 能管服务器 + 远程终端)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.9.0 — AI 能管服务器 + 远程终端**
+            - 新增工具 `ssh_hosts` / `ssh_exec`：AI 直接在已保存的 SSH 主机上执行命令，输出同时镜像到终端
+            - WebRTC 从自检升级成「远程终端」：两台手机配对后 A 操作 B 的容器终端，信令走 Cloudflare 隧道的 `/rtc`
+            - 修掉模板遗留的 test/widget_test.dart（引用不存在的 MyApp，analyze 一直报 error），换成 5 个入口的冒烟测试
+            - 本地用 Flutter 3.50 跑 `flutter analyze`：0 error；`flutter test` 通过
+
             **2.8.0 — SSH 可用了 + Agent 可中断**
             - SSH：私钥认证（粘贴 PEM / 从手机选文件）、SHA256 主机指纹确认（记住 / 本次 / 取消）、保存主机、20s keepalive、断线提示与重连
             - Agent：发送键在跑的时候变成 ⏹，点了真断 socket（HttpClient.close(force:true)），不等超时；重试循环里也立刻醒
