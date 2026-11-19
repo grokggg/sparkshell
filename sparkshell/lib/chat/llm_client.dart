@@ -84,12 +84,19 @@ class LlmClient {
     this.onRetry,
     this.vision = false,
     this.onVisionFallback,
+    this.modelOverride,
   });
 
   final ApiConfig cfg;
 
   /// 重试进度回调：界面拿它显示「连接不稳定，正在重试 2/5…」。
   final void Function(String message)? onRetry;
+
+  /// 本轮实际使用的模型名。带图且配了看图模型时由调用方传入；
+  /// null 就沿用 [ApiConfig.model]，老路径行为不变。
+  final String? modelOverride;
+
+  String get model => modelOverride ?? cfg.model;
 
   /// 本轮是否允许把图片按多模态格式发出去。
   ///
@@ -246,7 +253,7 @@ class LlmClient {
 
     while (true) {
       final body = jsonEncode({
-        'model': cfg.model,
+        'model': model,
         'stream': true,
         'temperature': cfg.temperature,
         'messages': convo,
@@ -306,7 +313,7 @@ class LlmClient {
       // 流式走不通（免费中转常把 SSE 掐断）→ 同一接入点、同一模型，改成整段返回。
       // 用户明确要求：不换模型、不换接入点，只换传输方式。
       if (cancel != null && cancel.isCancelled) return;
-      onRetry?.call('流式被中断，改用整段返回（模型仍是 ${cfg.model}）');
+      onRetry?.call('流式被中断，改用整段返回（模型仍是 $model）');
       final msg = await complete(convo, cancel: cancel);
       final text = (msg['content'] as String?) ?? '';
       if (text.isNotEmpty) yield text;
@@ -326,7 +333,7 @@ class LlmClient {
     while (true) {
       final hasTools = tools != null && tools.isNotEmpty;
       final payload = jsonEncode({
-        'model': cfg.model,
+        'model': model,
         'messages': convo,
         'temperature': cfg.temperature,
         'stream': false,
@@ -385,7 +392,7 @@ class LlmClient {
     if (!looksLikeVisionRejection(error.statusCode, error.body)) return false;
     if (!hasImageParts(convo)) return false;
 
-    final msg = '当前模型（${cfg.model}）看不了图片，已自动去掉图片、只发文字重试';
+    final msg = '当前模型（$model）看不了图片，已自动去掉图片、只发文字重试';
     onVisionFallback?.call(msg);
     // 顺手挂到状态条上：用户能立刻看到「这轮为什么只有文字」，
     // 而不是等模型回答完才发现图没生效。

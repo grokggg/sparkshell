@@ -10,6 +10,7 @@ class ApiConfig {
     this.baseUrl = 'https://api.qnaigc.com/v1',
     this.apiKey = '',
     this.model = 'qiniu/conatus-free',
+    this.visionModel = '',
     this.systemPrompt = '你是 SparkShell 里的工程助手。回答简洁，给可执行命令。',
     this.temperature = 0.3,
   });
@@ -17,6 +18,14 @@ class ApiConfig {
   String baseUrl;
   String apiKey;
   String model;
+
+  /// 看图专用模型。留空 = 和主模型一样。
+  ///
+  /// 免费接入点（如 conatus-free）多是纯文本，图片塞进去会 400 或降级；
+  /// 填一个真能读图的模型（qwen-vl / gpt-4o-mini 之类），只有带图那轮才切过去，
+  /// 省额度，也不影响平时干活。
+  String visionModel;
+
   String systemPrompt;
   double temperature;
 
@@ -28,6 +37,10 @@ class ApiConfig {
   String filesDir = '';
 
   int get backupCount => backups.length;
+
+  /// 这一轮该用哪个模型：带图且配了看图模型才切。
+  String modelFor({bool hasImages = false}) =>
+      hasImages && visionModel.trim().isNotEmpty ? visionModel.trim() : model;
 
   /// 切到下一个备用接入点；把当前这个挪到队尾，形成环形轮换。
   Future<bool> rotate() async {
@@ -57,6 +70,7 @@ class ApiConfig {
         baseUrl: m['baseUrl'] as String? ?? 'https://api.qnaigc.com/v1',
         apiKey: m['apiKey'] as String? ?? '',
         model: m['model'] as String? ?? 'qiniu/conatus-free',
+        visionModel: m['visionModel'] as String? ?? '',
         systemPrompt: m['systemPrompt'] as String? ?? '',
         temperature: (m['temperature'] as num?)?.toDouble() ?? 0.3,
       );
@@ -85,6 +99,7 @@ class ApiConfig {
       'baseUrl': baseUrl,
       'apiKey': apiKey,
       'model': model,
+      'visionModel': visionModel,
       'systemPrompt': systemPrompt,
       'temperature': temperature,
       'backups': backups,

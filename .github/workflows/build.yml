@@ -117,12 +117,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.3.1-apk
-          name: SparkShell 3.3.1 (proot loader 走环境变量)
+          tag_name: v3.4.0-apk
+          name: SparkShell 3.4.0 (审批只拦危险动作 + 看图模型分档)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.4.0 — 审批只拦危险动作；带图自动切看图模型**
+            - 改：工具审批从「每个都问」改成「危险的才问」—— rm -rf /、mkfs、dd of=/dev/、curl|sh、chmod 777 /、su、ssh_exec、写容器外路径等；只读、容器内写直接过
+            - 新：设置里可填「看图模型」，只有带图那轮切过去（`ApiConfig.modelFor`），纯文字仍走主模型
+            - 修：审批弹窗标题直接说原因（「要格式化分区」），不再只显示工具名
+
             **3.3.1 — loader 改走 PROOT_LOADER 环境变量**
             - 改：`PROOT_LOADER` / `PROOT_LOADER_32` 进环境，换 proot 二进制不必再改字节（dsh-go 同样做法，其 libproot.so 里仍留 Termux 路径）
 

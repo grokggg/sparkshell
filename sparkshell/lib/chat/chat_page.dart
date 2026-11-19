@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../agent/agent_runner.dart';
+import '../agent/approval.dart';
 import '../agent/cancel_token.dart';
 import '../app_bus.dart';
 import '../linux_env.dart';
@@ -463,6 +464,7 @@ class _ChatPageState extends State<ChatPage> {
     final client = _client = LlmClient(
       cfg,
       vision: images.isNotEmpty,
+      modelOverride: cfg.modelFor(hasImages: images.isNotEmpty),
       onVisionFallback: _onVisionFallback,
       onRetry: (m) {
         if (mounted) setState(() => _status = m);
@@ -572,6 +574,7 @@ class _ChatPageState extends State<ChatPage> {
       cfg: cfg,
       cancel: token,
       vision: images.isNotEmpty,
+      modelOverride: cfg.modelFor(hasImages: images.isNotEmpty),
       onVisionFallback: _onVisionFallback,
       onStatus: (m) {
         // 停止后的「正在停止…」不覆盖：旧 run 可能在收尾时回调一条重试文案
@@ -649,11 +652,15 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<bool> _approve(String name, Map<String, dynamic> args) async {
     if (_autoApprove) return true;
-    final body = jsonEncode(args);
+    // 只读/容器内写不打扰，只有真会出事的那几类才问。
+    final req = approvalFor(name, args);
+    if (req == null) return true;
+    final body = req.snippet;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('允许执行 $name ？'),
+        title: Text(req.reason),
+        subtitle: Text(name, style: const TextStyle(fontSize: 11, color: Colors.grey)),
         content: SingleChildScrollView(
           child: Text(
             body.length > 600 ? '${body.substring(0, 600)}…' : body,
@@ -1021,6 +1028,7 @@ tags: debian, alpine, toolchain
     final base = TextEditingController(text: cfg.baseUrl);
     final key = TextEditingController(text: cfg.apiKey);
     final model = TextEditingController(text: cfg.model);
+    final vmodel = TextEditingController(text: cfg.visionModel);
     final sys = TextEditingController(text: cfg.systemPrompt);
     final bak = TextEditingController(
       text: cfg.backups
@@ -1071,6 +1079,13 @@ tags: debian, alpine, toolchain
                 decoration: const InputDecoration(
                   labelText: '模型',
                   hintText: 'qiniu/conatus-free',
+                ),
+              ),
+              TextField(
+                controller: vmodel,
+                decoration: const InputDecoration(
+                  labelText: '看图模型（可选）',
+                  hintText: 'qwen-vl-max / gpt-4o-mini；留空就还是用上面的模型',
                 ),
               ),
               TextField(
@@ -1155,6 +1170,7 @@ tags: debian, alpine, toolchain
                   ..baseUrl = base.text.trim()
                   ..apiKey = key.text.trim()
                   ..model = model.text.trim()
+                  ..visionModel = vmodel.text.trim()
                   ..systemPrompt = sys.text
                   ..temperature = temp;
                 // 备用接入点：一行 `baseUrl|key|model`，空行忽略

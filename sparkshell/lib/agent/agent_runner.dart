@@ -40,6 +40,7 @@ class AgentRunner {
     this.cancel,
     this.vision = false,
     this.onVisionFallback,
+    this.modelOverride,
   });
 
   final ApiConfig cfg;
@@ -62,6 +63,9 @@ class AgentRunner {
   /// 只有「用户这次真的附了图、且调用方判断接入点能读懂图」才打开；
   /// 关着的时候即使消息里混进图片块也不做降级——那属于调用方的 bug，不该被静默掩盖。
   final bool vision;
+
+  /// 本轮用哪个模型（带图时可能是看图模型）。null = 沿用 cfg.model。
+  final String? modelOverride;
 
   /// 服务端表示看不了图、我们已去掉图片重发时的回调（界面必须告诉用户「这轮只发了文字」）。
   final void Function(String message)? onVisionFallback;
@@ -206,6 +210,7 @@ class AgentRunner {
       onRetry: (m) => onStatus?.call(m),
       vision: vision,
       onVisionFallback: onVisionFallback,
+      modelOverride: modelOverride,
     );
     onStatus?.call(null);
     try {
