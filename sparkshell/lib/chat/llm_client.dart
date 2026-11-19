@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'api_config.dart';
+import 'retry_policy.dart';
 
 /// 极简 OpenAI 兼容客户端：POST /chat/completions，`stream: true` 走 SSE。
 ///
@@ -11,75 +12,55 @@ import 'api_config.dart';
 /// 2. 还不行就自动切到备用接入点（`ApiConfig.backups`），切过去能通就留在那儿；
 /// 3. 全部接入点都失败才抛错，错误文案带"是哪个接入点挂了"。
 class LlmClient {
-  LlmClient(this.cfg);
+  LlmClient(this.cfg, {this.onRetry});
 
   final ApiConfig cfg;
+
+  /// 重试进度回调：界面拿它显示「连接不稳定，正在重试 2/5…」。
+  final void Function(String message)? onRetry;
+
+  /// 免费中转站的 5xx / 522 / 超时基本都是链路抖动：同一个接入点重试几次就好，
+  /// 不换模型、不换接入点（这是用户明确要的行为）。
+  static const _policy = RetryPolicy();
   HttpClient? _http;
 
-  static const _triesPerEndpoint = 2;
 
-  static bool _retryable(int code) => code == 408 || code == 429 || code >= 500;
-
-  static String _why(int code) {
-    switch (code) {
-      case 522:
-      case 523:
-      case 524:
-        return '接入点网关超时（$code）：中转服务的源站没响应';
-      case 502:
-      case 503:
-      case 504:
-        return '接入点暂时不可用（$code）';
-      case 429:
-        return '请求太频繁或额度用尽（429）';
-      case 401:
-        return 'API Key 无效（401）';
-      default:
-        return 'HTTP $code';
-    }
-  }
-
-  /// 打开一次 POST；内部完成「同点重试 + 跨点轮换」。
+  /// 打开一次 POST；失败按 RetryPolicy 分类重试，重试次数用完才抛。
   Future<HttpClientResponse> _open(
     String path,
     String Function() body, {
     bool sse = false,
   }) async {
     final client = _http ??= HttpClient()..connectionTimeout = const Duration(seconds: 30);
-    var lastErr = '请求失败';
-    var rotated = 0;
+    final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    HttpException? last;
 
-    while (true) {
-      final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-      for (var attempt = 1; attempt <= _triesPerEndpoint; attempt++) {
-        try {
-          final req = await client.postUrl(Uri.parse('$base$path'));
-          req.headers.set('Content-Type', 'application/json');
-          req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
-          if (sse) req.headers.set('Accept', 'text/event-stream');
-          req.add(utf8.encode(body()));
-          final resp = await req.close();
-          if (resp.statusCode == 200) return resp;
+    for (var attempt = 1; attempt <= _policy.maxAttempts; attempt++) {
+      try {
+        final req = await client.postUrl(Uri.parse('$base$path'));
+        req.headers.set('Content-Type', 'application/json');
+        req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
+        if (sse) req.headers.set('Accept', 'text/event-stream');
+        req.add(utf8.encode(body()));
+        final resp = await req.close().timeout(const Duration(seconds: 90));
+        if (resp.statusCode == 200) return resp;
 
-          final err = await resp.transform(utf8.decoder).join();
-          final short = err.length > 200 ? err.substring(0, 200) : err;
-          lastErr = '${_why(resp.statusCode)}｜$short';
-          if (!_retryable(resp.statusCode)) throw HttpException(lastErr);
-        } on SocketException catch (e) {
-          lastErr = '连不上 $base（${e.message}）';
-        } on TimeoutException {
-          lastErr = '连接超时：$base';
-        }
-        if (attempt < _triesPerEndpoint) {
-          await Future<void>.delayed(const Duration(milliseconds: 900));
-        }
+        final err = await resp.transform(utf8.decoder).join();
+        final out = _policy.judge(statusCode: resp.statusCode, body: err);
+        last = HttpException(out.tip);
+        if (!out.retry) throw last; // Key 失效 / 参数错，重试没意义
+      } on SocketException catch (e) {
+        last = HttpException(_policy.judge(networkError: e.message).tip);
+      } on TimeoutException {
+        last = HttpException(_policy.judge(networkError: 'timeout').tip);
       }
-      if (rotated < cfg.backupCount && await cfg.rotate()) {
-        rotated++;
-        continue;
+
+      if (attempt < _policy.maxAttempts) {
+        onRetry?.call(progressText(attempt + 1, _policy.maxAttempts));
+        await Future<void>.delayed(Duration(milliseconds: _policy.delayMs(attempt)));
       }
-      throw HttpException(lastErr);
     }
+    throw last ?? const HttpException('请求失败');
   }
 
   Stream<String> chat(List<Map<String, String>> messages) async* {
@@ -149,7 +130,8 @@ class LlmClient {
       final resp = await req.close();
       final text = await resp.transform(utf8.decoder).join();
       if (resp.statusCode != 200) {
-        throw HttpException('${_why(resp.statusCode)}｜${text.length > 160 ? text.substring(0, 160) : text}');
+        throw HttpException(
+            _policy.judge(statusCode: resp.statusCode, body: text).tip);
       }
       return 'OK ${resp.statusCode}（${text.length} 字节模型列表）';
     } finally {

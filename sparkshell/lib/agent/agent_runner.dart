@@ -29,7 +29,10 @@ class AgentRunner {
   static const preamble = '你在一台 Android 手机的 proot 容器里，rootfs 为 Alpine 或 Debian，'
       '工作目录 /root，PATH 已配好（/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin）。\n'
       '工具：bash（容器内 shell，每次独立进程，用 cd /root && ... 串联）、read_file、write_file、'
-      'list_dir、edit_file（按上下文替换）、search_files、todo。\n'
+      'list_dir、edit_file（单处替换）、apply_patch（一次改多处）、search_files、todo、'
+      'task_log / task_list（读后台任务）。\n'
+      '装包、pip install、跑超过 60 秒的脚本，一律 bash 加 background=true，拿到任务 id 后用 '
+      'task_log 轮询，别把一次调用卡在那里。\n'
       '环境事实：Alpine 只有 busybox，python3/git/curl 默认都不存在。\n'
       '跑 python 前先 self-heal，一步到位，别分三步：'
       '`command -v python3 >/dev/null || apk add --no-cache python3; cd /root && python3 xxx.py`。'
@@ -44,7 +47,10 @@ class AgentRunner {
           .join('\n\n');
       messages.insert(0, {'role': 'system', 'content': sys});
     }
-    final client = LlmClient(cfg);
+    final client = LlmClient(
+      cfg,
+      onRetry: (m) => onToolResult('⏳ $m'),
+    );
     try {
       for (var step = 0; step < maxSteps; step++) {
         final msg = await client.complete(messages, tools: Tools.specs);

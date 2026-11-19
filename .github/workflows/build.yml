@@ -108,12 +108,20 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.10.0-apk
-          name: SparkShell 1.10.0 (多接入点自动故障转移)
+          tag_name: v2.0.0-apk
+          name: SparkShell 2.0.0 (完整功能版)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **2.0.0 — 完整功能版**
+            - 重试策略重写：同一接入点最多试 5 次（退避 1.2/2.5/5/9s），界面实时显示「连接不稳定，正在重试 2/5…」
+            - 错误分类说人话：限流(429) / 接入点暂时不稳定(5xx/522) / Key 失效(401) 分得清，**不再建议换模型**
+            - 后台任务：`bash background=true` 立即返回任务 id，`task_log` 看输出、`task_list` 看全部；锁屏/切后台不断
+            - `apply_patch`：一次改多处，任一处在文件里找不到就整体不写，不会改一半
+            - 会话导出：Chat 右上角导出 JSON 到 `/root/share/chat-*.json`，文件页可直接导到手机
+            - Agent system prompt 加了"长任务用后台"的环境常识
+
             **1.10.0**
             - 多接入点：设置里可填最多若干备用 `baseUrl|key|model`，主接入点 5xx/连不上时自动切过去
             - 切换后能通就留在那个接入点（并把配置写回本地），下次启动不用再试坏的那个

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../linux_env.dart';
+import 'task_store.dart';
 
 /// Agent 可用的四个动作。全部作用在 proot 容器里，宿主目录不暴露。
 ///
@@ -17,7 +18,8 @@ class Tools {
           'type': 'object',
           'properties': {
             'command': {'type': 'string', 'description': '要执行的命令'},
-            'timeout': {'type': 'integer', 'description': '秒，默认 60，最大 300'},
+            'timeout': {'type': 'integer', 'description': '秒，默认 120，最大 600'},
+            'background': {'type': 'boolean', 'description': 'true 表示丢到后台跑（装大包/长脚本用），立刻返回任务 id'},
           },
           'required': ['command'],
         },
@@ -102,6 +104,55 @@ class Tools {
     {
       'type': 'function',
       'function': {
+        'name': 'apply_patch',
+        'description': '一次改多处：edits 是 [{old_string,new_string}] 数组，按顺序在同一文件里做精确替换。'
+            '任意一处找不到原文就整体不写（不会半途改坏文件）。适合重构、批量改名。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'path': {'type': 'string'},
+            'edits': {
+              'type': 'array',
+              'items': {
+                'type': 'object',
+                'properties': {
+                  'old_string': {'type': 'string'},
+                  'new_string': {'type': 'string'},
+                },
+                'required': ['old_string', 'new_string'],
+              },
+            },
+          },
+          'required': ['path', 'edits'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'task_log',
+        'description': '读后台任务（bash background=true 启动的）的最后若干行输出，并告知是否还在跑。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'id': {'type': 'string', 'description': '任务 id，如 t1750000000'},
+            'lines': {'type': 'integer', 'description': '默认 60'},
+          },
+          'required': ['id'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'task_list',
+        'description': '列出所有后台任务：id、是否还在跑、日志字节数、命令。',
+        'parameters': {'type': 'object', 'properties': {}},
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
         'name': 'todo',
         'description': '维护任务清单。传数组覆盖当前清单，传空数组清空。适合多步任务先列计划再逐项推进。',
         'parameters': {
@@ -140,6 +191,12 @@ class Tools {
           return _edit(args);
         case 'search_files':
           return _search(args);
+        case 'apply_patch':
+          return _patch(args);
+        case 'task_log':
+          return _taskLog(args);
+        case 'task_list':
+          return _taskList();
         case 'todo':
           return _todo(args);
         default:
@@ -153,6 +210,7 @@ class Tools {
   static Future<String> _bash(Map<String, dynamic> a) async {
     final cmd = (a['command'] as String? ?? '').trim();
     if (cmd.isEmpty) return '缺少 command';
+    if (a['background'] == true) return _bashBackground(cmd);
     final secs = ((a['timeout'] as num?)?.toInt() ?? 120).clamp(5, 600);
     final r = await LinuxEnv.instance
         .execShell(cmd)
@@ -230,6 +288,73 @@ class Tools {
     await f.writeAsString(out, flush: true);
     final d = _diffText(text, out);
     return '已替换 ${all ? hits : 1} 处，文件现 ${out.length} 字符${d.isEmpty ? '' : '\n$d'}';
+  }
+
+
+  static TaskStore? _taskStore() {
+    final root = LinuxEnv.instance.rootfsPath;
+    if (root == null) return null;
+    return TaskStore('$root/root/.tasks');
+  }
+
+  /// 长任务丢后台：立刻返回 id，锁屏/切后台也不会被系统砍掉。
+  static Future<String> _bashBackground(String cmd) async {
+    final store = _taskStore();
+    if (store == null) return '容器还没准备好，先 ensureReady';
+    final t = await store.start(cmd, (sh) => LinuxEnv.instance.execShell(sh));
+    return '已在后台启动：${t.id}\n命令：${t.command}\n'
+        '日志：${t.logPath}\n稍后用 task_log(id="${t.id}") 看输出，task_list 看全部。';
+  }
+
+  static Future<String> _taskLog(Map<String, dynamic> a) async {
+    final id = (a['id'] as String? ?? '').trim();
+    if (id.isEmpty) return '缺少 id';
+    final store = _taskStore();
+    if (store == null) return '容器还没准备好';
+    final lines = ((a['lines'] as num?)?.toInt() ?? 60).clamp(5, 400);
+    final alive = await store.alive(id);
+    final body = await store.tail(id, lines: lines);
+    return '[${alive ? '运行中' : '已结束'}] $id 最后 $lines 行：\n$body';
+  }
+
+  static Future<String> _taskList() async {
+    final store = _taskStore();
+    if (store == null) return '容器还没准备好';
+    final all = await store.list();
+    if (all.isEmpty) return '还没有后台任务';
+    final sb = StringBuffer();
+    for (final t in all) {
+      sb.writeln('${t['id']}  ${t['alive'] == 'true' ? '运行中' : '已结束'}  '
+          '${t['bytes']}B  ${t['command']}');
+    }
+    return sb.toString();
+  }
+
+  /// 多段补丁：全部命中才写盘，避免改一半。
+  static Future<String> _patch(Map<String, dynamic> a) async {
+    final p = (a['path'] as String? ?? '').trim();
+    final raw = a['edits'] as List? ?? const [];
+    if (p.isEmpty || raw.isEmpty) return '缺少 path 或 edits';
+    final f = _resolve(p);
+    if (f == null) return '路径不合法：$p';
+    if (!await f.exists()) return '文件不存在：$p';
+    var text = await f.readAsString();
+    final before = text;
+    var idx = 0;
+    for (final e in raw) {
+      idx++;
+      final oldS = (e as Map)['old_string'] as String? ?? '';
+      final newS = e['new_string'] as String? ?? '';
+      if (oldS.isEmpty) return '第 $idx 段 old_string 为空';
+      final hits = oldS.allMatches(text).length;
+      if (hits == 0) return '第 $idx 段找不到原文，整份文件未改动：${oldS.length > 60 ? '${oldS.substring(0, 60)}…' : oldS}';
+      if (hits > 1) return '第 $idx 段原文出现 $hits 次，需要带更多上下文才能唯一定位';
+      text = text.replaceFirst(oldS, newS);
+    }
+    if (text == before) return '内容没有变化';
+    await f.writeAsString(text, flush: true);
+    final d = _diffText(before, text);
+    return '已应用 ${raw.length} 处修改，文件现 ${text.length} 字符\n$d';
   }
 
   /// 极简行级 diff（LCS）：给 Chat 的 diff 卡片用，最多 80 行。

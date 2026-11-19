@@ -1,5 +1,6 @@
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -47,6 +48,9 @@ class _ChatPageState extends State<ChatPage> {
   /// 上一条真正发出去的内容，失败后「重试」用它。
   String? _lastTry;
 
+  /// 重试进度文案（「连接不稳定，正在重试 2/5…」），成功后清空。
+  String? _status;
+
   /// 把 HTTP 错误翻译成人话：免费模型 429 不是崩溃，是额度/限流。
   String _friendly(Object e) {
     final t = '$e';
@@ -57,12 +61,9 @@ class _ChatPageState extends State<ChatPage> {
       return '请求太频繁被限流（429），等几十秒再试。';
     }
     if (t.contains('401')) return 'API Key 无效或过期（401），去设置里重新填。';
-    if (t.contains('522') || t.contains('523') || t.contains('524')) {
-      return '接入点网关超时（$e）。已自动重试 3 次：中转站源站没响应，'
-          '换一个接入点或模型再发；点右边「重试」也可以。';
-    }
-    if (RegExp(r'HTTP 5\d\d').hasMatch(t)) {
-      return '模型服务端故障（$e），已自动重试 3 次。稍等一会儿或换模型。';
+    if (RegExp(r'\b5\d\d\b').hasMatch(t)) {
+      return '接入点暂时不稳定（已自动重试 5 次）：这是中转链路的抖动，不是 Key 失效，'
+          '稍等一下点「重试」就能续上。';
     }
     if (t.contains('SocketException') || t.contains('timeout')) return '网络连不上模型服务，检查网络或换个接入点。';
     return t;
@@ -257,7 +258,12 @@ class _ChatPageState extends State<ChatPage> {
         .map((m) => {'role': m.role, 'content': m.text})
         .toList();
 
-    final client = _client = LlmClient(cfg);
+    final client = _client = LlmClient(
+      cfg,
+      onRetry: (m) {
+        if (mounted) setState(() => _status = m);
+      },
+    );
     final buf = StringBuffer();
     final done = Completer<void>();
     _sub = client.chat(history).listen(
@@ -276,7 +282,12 @@ class _ChatPageState extends State<ChatPage> {
       cancelOnError: true,
     );
     await done.future;
-    if (mounted) setState(() => _busy = false);
+    if (mounted) {
+      setState(() {
+        _busy = false;
+        _status = null;
+      });
+    }
     await _persist();
   }
 
@@ -328,7 +339,12 @@ class _ChatPageState extends State<ChatPage> {
     } catch (e) {
       if (mounted) setState(() => _err = _friendly(e));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _status = null;
+        });
+      }
       await _persist();
     }
   }
@@ -360,6 +376,39 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
     return ok ?? false;
+  }
+
+
+  /// 把当前对话导出成 JSON，落在容器的 /root/share 下，用文件页「导出」就能拿到手机里。
+  Future<void> _exportSession() async {
+    final root = LinuxEnv.instance.rootfsPath;
+    if (root == null) {
+      setState(() => _err = '容器还没准备好，先去 Linux 页看一眼');
+      return;
+    }
+    try {
+      final dir = Directory('$root/root/share');
+      await dir.create(recursive: true);
+      final ts = DateTime.now().toIso8601String().replaceAll(RegExp(r'[:.]'), '-');
+      final f = File('${dir.path}/chat-$ts.json');
+      await f.writeAsString(
+        const JsonEncoder.withIndent('  ').convert({
+          'app': 'SparkShell',
+          'version': '2.0.0',
+          'exportedAt': DateTime.now().toIso8601String(),
+          'model': _cfg?.model ?? '',
+          'messages': _msgs.map((m) => {'role': m.role, 'text': m.text}).toList(),
+        }),
+        flush: true,
+      );
+      final name = f.uri.pathSegments.last;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已导出 /root/share/$name（${_msgs.length} 条消息）')),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _err = '导出失败：$e');
+    }
   }
 
   Future<void> _settings() async {
@@ -532,10 +581,30 @@ class _ChatPageState extends State<ChatPage> {
             icon: Icon(_agent ? Icons.smart_toy : Icons.smart_toy_outlined),
             color: _agent ? Theme.of(context).colorScheme.primary : null,
           ),
+          IconButton(
+            tooltip: '导出会话',
+            onPressed: _exportSession,
+            icon: const Icon(Icons.ios_share),
+          ),
           IconButton(onPressed: _settings, icon: const Icon(Icons.settings)),
         ],
       ),
       body: Column(children: [
+        if (_status != null && _busy)
+          Container(
+            width: double.infinity,
+            color: Colors.amber.withOpacity(0.12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            child: Row(children: [
+              const SizedBox(
+                width: 11,
+                height: 11,
+                child: CircularProgressIndicator(strokeWidth: 1.6),
+              ),
+              const SizedBox(width: 8),
+              Text(_status!, style: const TextStyle(fontSize: 11)),
+            ]),
+          ),
         if (_err != null)
           Container(
             width: double.infinity,
