@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../agent/agent_runner.dart';
 import '../app_bus.dart';
 import '../linux_env.dart';
+import '../agent/tools.dart';
 import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
@@ -51,7 +52,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<String>? _sub;
   String? _filesDir;
   bool _busy = false;
-  bool _agent = false;
+  bool _agent = true;
   bool _autoApprove = false;
   String? _err;
 
@@ -523,8 +524,8 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final client = LlmClient(cfg);
       final msg = await client.complete(<Map<String, dynamic>>[
-        {'role': 'user', 'content': 'ping'},
-      ]);
+        {'role': 'user', 'content': '请用工具列出 /root 的文件'},
+      ], tools: Tools.specs);
       client.dispose();
       sw.stop();
       final ok = (msg['content'] as String?)?.trim().isNotEmpty ?? false;
@@ -533,10 +534,13 @@ class _ChatPageState extends State<ChatPage> {
         _err = ok ? null : '模型返回了空内容（接入点通，但模型没吐字）';
       });
       if (!mounted) return;
+      final nativeTools = ((msg['tool_calls'] as List?) ?? const []).isNotEmpty;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(ok
-            ? '接入正常：${cfg.model}  ·  ${sw.elapsedMilliseconds}ms'
-            : '接入通了但没内容  ·  ${sw.elapsedMilliseconds}ms'),
+        content: Text(!ok
+            ? '接入通了但没内容  ·  ${sw.elapsedMilliseconds}ms'
+            : nativeTools
+                ? '原生工具调用可用  ·  ${cfg.model}  ·  ${sw.elapsedMilliseconds}ms'
+                : '这个模型不返回 tool_calls，已自动走文本协议（一样能干活）  ·  ${sw.elapsedMilliseconds}ms'),
       ));
       TerminalBus.instance
           .mirror('\x1b[36m⚙ 自检\x1b[0m ${ok ? 'ok' : '空回复'} ${sw.elapsedMilliseconds}ms\r\n');

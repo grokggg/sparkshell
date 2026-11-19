@@ -50,6 +50,31 @@ class AgentRunner {
   /// 重试/等待类状态：只更新顶部进度条，不往对话里插气泡（否则每条都出现两遍）
   final void Function(String? status)? onStatus;
 
+  /// 文本协议提示只说一次
+  bool _toldTextProtocol = false;
+
+  static final _toolTag =
+      RegExp(r'<tool\s+name="([A-Za-z_]+)"\s*>([\s\S]*?)</tool>');
+
+  /// 从模型正文里捞 <tool name="bash">{...}</tool>
+  static ({String name, Map<String, dynamic> args})? _parseTextTool(String text) {
+    final m = _toolTag.firstMatch(text);
+    if (m == null) return null;
+    final name = m.group(1) ?? '';
+    final body = (m.group(2) ?? '').trim();
+    try {
+      final v = jsonDecode(body);
+      if (v is Map<String, dynamic>) return (name: name, args: v);
+      if (v is Map) return (name: name, args: Map<String, dynamic>.from(v));
+    } catch (_) {
+      // 不是 JSON 就当成单条命令（模型常偷懒直接写 shell）
+      if (name == 'bash' && body.isNotEmpty) {
+        return (name: name, args: <String, dynamic>{'command': body});
+      }
+    }
+    return null;
+  }
+
   /// 容器事实写进 system：不写这段，模型会满世界找 python3、把步数烧在探测上。
   static const preamble = '你在一台 Android 手机的 proot 容器里，rootfs 为 Alpine 或 Debian，'
       '工作目录 /root，PATH 已配好（/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin）。\n'
@@ -63,7 +88,11 @@ class AgentRunner {
       '`command -v python3 >/dev/null || apk add --no-cache python3; cd /root && python3 xxx.py`。'
       'Debian 用 `command -v python3 >/dev/null || (apt-get update && apt-get install -y python3)`。\n'
       'apk/apt 源已在 App 侧换成国内镜像，装包通常几十秒；超过 2 分钟没输出就先换策略。\n'
-      '改写文件优先 edit_file（只传 old/new 片段），整文件覆盖才用 write_file。';
+      '改写文件优先 edit_file（只传 old/new 片段），整文件覆盖才用 write_file。\n'
+      '如果这个接入点不支持 function calling（你发不出 tool_calls），改用文本协议，一行一条：\n'
+      '<tool name="bash">{"command":"ls -la /root"}</tool>\n'
+      '标签里的 JSON 必须能被 JSON.parse；一次只发一个工具，等结果回来再决定下一步。'
+      '禁止说「我没有终端工具」——你有，标签就是调用方式。';
 
   Future<void> run(List<Map<String, dynamic>> messages) async {
     if (messages.isEmpty || messages.first['role'] != 'system') {
@@ -84,7 +113,29 @@ class AgentRunner {
         if (content.isNotEmpty) onText(content);
 
         final calls = msg['tool_calls'] as List?;
-        if (calls == null || calls.isEmpty) return;
+        if (calls == null || calls.isEmpty) {
+          // 文本协议：模型不支持 function calling 时的兜底通道
+          final t = _parseTextTool(content);
+          if (t == null) return;
+          if (!_toldTextProtocol) {
+            _toldTextProtocol = true;
+            onToolResult('ℹ 这个接入点不返回 tool_calls，已改用文本协议执行（功能一样）');
+          }
+          final ok = await approve(t.name, t.args);
+          final sw = Stopwatch()..start();
+          final out = ok ? await Tools.run(t.name, t.args) : '用户拒绝执行';
+          sw.stop();
+          final cb = onTool;
+          if (cb != null) {
+            cb(ToolEvent(
+                name: t.name, args: t.args, output: out, ok: ok, ms: sw.elapsedMilliseconds));
+          } else {
+            onToolResult('${ok ? '▶' : '⊘'} ${t.name}\n${_brief(t.args)}\n$out');
+          }
+          messages.add({'role': 'assistant', 'content': content});
+          messages.add({'role': 'user', 'content': '[工具 ${t.name} 的输出]\n$out'});
+          continue;
+        }
 
         messages.add({'role': 'assistant', 'content': content, 'tool_calls': calls});
         for (final raw in calls) {
