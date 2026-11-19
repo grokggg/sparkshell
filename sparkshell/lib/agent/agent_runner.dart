@@ -196,8 +196,10 @@ class AgentRunner {
           continue;
         }
 
-        messages.add({'role': 'assistant', 'content': raw.trim(), 'tool_calls': calls});
-        for (final rc in calls) {
+        // 走到这里说明原生 tool_calls 存在（noNative 分支已 return/continue）
+        final nativeCalls = calls!;
+        messages.add({'role': 'assistant', 'content': raw.trim(), 'tool_calls': nativeCalls});
+        for (final rc in nativeCalls) {
           final c = rc as Map;
           final fn = c['function'] as Map? ?? const {};
           final name = fn['name'] as String? ?? '';
