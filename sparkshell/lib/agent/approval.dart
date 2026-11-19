@@ -17,8 +17,6 @@ class ApprovalRequest {
 
 /// 会毁数据/毁系统/远程取代码执行的动作。
 const _bashRules = <String, String>{
-  r'\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+/(\s|$)': '要在根目录删东西',
-  r'\brm\s+-[a-zA-Z]*r[a-zA-Z]*f?\s+~': '要删整个 home',
   r'--no-preserve-root': '明确要求连根删',
   r'\bmkfs(\.\w+)?\b': '要格式化分区',
   r'\bdd\b.*\bof=/dev/': '要直接写块设备',
@@ -56,6 +54,9 @@ ApprovalRequest? approvalFor(String name, Map<String, dynamic> args) {
           return ApprovalRequest(e.value, _clip(cmd));
         }
       }
+      if (_rmHitsSomethingImportant(cmd)) {
+        return ApprovalRequest('要递归删除容器外的东西', _clip(cmd));
+      }
       return null;
 
     case 'ssh_exec':
@@ -71,6 +72,35 @@ ApprovalRequest? approvalFor(String name, Map<String, dynamic> args) {
     default:
       return null;
   }
+}
+
+/// rm 单独判：正则判不准（`-fr`、多个目标、`~`、相对路径都会漏）。
+///
+/// 判据是"删的东西是不是可重建"：`/root/build` 可重建，放过；
+/// `/var/lib`、`~`、`/` 不可重建，拦。只认带 -r/-R 或 -f 的 rm，`rm a.txt` 不烦人。
+bool _rmHitsSomethingImportant(String cmd) {
+  for (final seg in cmd.split(RegExp(r'&&|\|\||;'))) {
+    final t = seg.trim().split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
+    final i = t.indexWhere((x) => x == 'rm' || x.endsWith('/rm'));
+    if (i < 0) continue;
+    var recursive = false;
+    final targets = <String>[];
+    for (final a in t.skip(i + 1)) {
+      if (a.startsWith('-')) {
+        if (a.contains('r') || a.contains('R')) recursive = true;
+        continue;
+      }
+      targets.add(a);
+    }
+    if (!recursive) continue;
+    for (final p in targets) {
+      if (p == '~' || p.startsWith('~/') || p == r'$HOME') return true;
+      if (!p.startsWith('/')) continue; // 相对路径落在 cwd
+      final under = _safeRoots.any((r) => p.startsWith('$r/'));
+      if (!under) return true; // /var/lib、/、/system …
+    }
+  }
+  return false;
 }
 
 /// 弹窗正文：最多 600 字，多了看不完也没必要。
