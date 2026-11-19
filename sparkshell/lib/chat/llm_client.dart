@@ -16,6 +16,35 @@ class _Cancelled implements Exception {
   String toString() => 'cancelled';
 }
 
+/// 「测试连接」的结果。
+///
+/// 只描述这一次探测的结论，**不抛异常**：网络层的失败全部折成一条中文
+/// [message]，界面直接显示即可，不用再包一层 catch。
+class PingResult {
+  const PingResult({
+    required this.ok,
+    required this.message,
+    required this.ms,
+    this.statusCode,
+  });
+
+  /// 是否真的连通（HTTP 2xx 且读完了响应）
+  final bool ok;
+
+  /// 给用户看的一句中文结论
+  final String message;
+
+  /// 这次探测耗时（毫秒），从发请求到读完响应体
+  final int ms;
+
+  /// 服务端返回的状态码；压根没连上时为 null
+  final int? statusCode;
+
+  /// 让旧代码 `'✅ $result'` 这种字符串插值继续可用。
+  @override
+  String toString() => message;
+}
+
 /// 极简 OpenAI 兼容客户端：POST /chat/completions，`stream: true` 走 SSE。
 ///
 /// 稳定性策略（针对中转站 5xx/522 这类"不是我们代码的错"的故障）：
@@ -47,7 +76,7 @@ class LlmClient {
     CancelToken? cancel,
   }) async {
     final client = _http ??= HttpClient()..connectionTimeout = const Duration(seconds: 30);
-    final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final base = normalizeBase(cfg.baseUrl);
     HttpException? last;
     var reason = 'network';
 
@@ -244,24 +273,151 @@ class LlmClient {
     return (choices.first as Map)['message'] as Map<String, dynamic>;
   }
 
-  /// 非流式，用于「测试连接」按钮。
-  Future<String> ping() async {
-    final base = cfg.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+  /// 把用户手填的地址补成可用的 base URL：
+  /// `api.qnaigc.com/v1/` → `https://api.qnaigc.com/v1`
+  ///
+  /// 设置页的输入框是自由文本，用户经常只填域名（漏 `https://`）或者粘贴时
+  /// 带上一串尾斜杠——这两种在 Uri.parse 里都不报错，但请求会静默发错地方，
+  /// 表现就是「测试连接点了没反应」。
+  static String normalizeBase(String raw) {
+    var b = raw.trim();
+    if (b.isEmpty) return '';
+    final lower = b.toLowerCase();
+    if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
+      b = 'https://$b';
+    }
+    final stripped = b.replaceAll(RegExp(r'/+$'), '');
+    // 只填了 `https://` 这种半截地址时，别把 scheme 的冒号也当成斜杠削掉
+    return stripped.endsWith(':') ? b : stripped;
+  }
+
+  /// 秒数文案：整数就写 `20 秒`，否则 `0.7 秒`。
+  static String _secondsText(Duration d) {
+    if (d.inMilliseconds % 1000 == 0) return '${d.inSeconds} 秒';
+    return '${(d.inMilliseconds / 1000).toStringAsFixed(1)} 秒';
+  }
+
+  /// 状态码 → 能让用户动手改的中文原因。
+  ///
+  /// 必须有区分度：以前所有非 200 都套 retry 的文案，用户看到「连接不稳定，
+  /// 正在重试」根本不知道该改 Key 还是改地址。
+  static String _statusHint(int code) {
+    switch (code) {
+      case 400:
+        return '请求被拒（400）：模型名或参数不对';
+      case 401:
+        return 'Key 不对或没权限（401）';
+      case 403:
+        return '这个 Key 没权限用这个接口或模型（403）';
+      case 404:
+        return '地址里少了 /v1（404），也可能是模型名不对';
+      case 429:
+        return '被限流了，稍等再试（429）';
+    }
+    if (code >= 500) return '接入点自己出问题了（$code），过一会儿再试';
+    return '请求被拒（$code）';
+  }
+
+  /// 数一下 `/models` 返回里的模型个数（有些中转站返回 `{"data": [...]}`，
+  /// 有些直接给数组）；解析不出来就返回 null，不把探测搞失败。
+  static int? _countModels(String body) {
+    try {
+      final m = jsonDecode(body);
+      if (m is Map && m['data'] is List) return (m['data'] as List).length;
+      if (m is List) return m.length;
+    } catch (_) {
+      // 不是 JSON：只要能返回 200 就算通
+    }
+    return null;
+  }
+
+  /// 发一次 GET，任何异常都折成 PingResult。
+  Future<PingResult> _pingOnce(
+    HttpClient client,
+    String base,
+    Duration timeout,
+    Stopwatch watch,
+  ) async {
+    PingResult done(bool ok, String message, {int? status}) => PingResult(
+          ok: ok,
+          message: message,
+          ms: watch.elapsedMilliseconds,
+          statusCode: status,
+        );
+
     try {
       final req = await client.getUrl(Uri.parse('$base/models'));
-      req.headers.set('Authorization', 'Bearer ${cfg.apiKey}');
+      req.headers.set('Authorization', 'Bearer ${cfg.apiKey.trim()}');
+      req.headers.set('Accept', 'application/json');
       final resp = await req.close();
-      final text = await resp.transform(utf8.decoder).join();
-      if (resp.statusCode != 200) {
-        throw HttpException(
-            _policy.judge(statusCode: resp.statusCode, body: text).tip);
+      final body = await resp.transform(utf8.decoder).join();
+      final code = resp.statusCode;
+
+      if (code >= 200 && code < 300) {
+        final n = _countModels(body);
+        return done(
+          true,
+          n == null ? '连接正常（HTTP $code）' : '连接正常（HTTP $code），可用模型 $n 个',
+          status: code,
+        );
       }
-      return 'OK ${resp.statusCode}（${text.length} 字节模型列表）';
+      return done(false, _statusHint(code), status: code);
+    } on TimeoutException {
+      return done(false, '等了 ${_secondsText(timeout)} 还没回应（超时），连不上这个地址');
+    } on SocketException {
+      return done(false, '连不上这个地址：域名解析失败或连接被拒，检查地址和网络');
+    } catch (e) {
+      // 地址里有非法字符之类：给一句人话，别把 Dart 异常名甩给用户
+      return done(false, '连不上这个地址：${e is FormatException ? '地址格式不对' : e}');
+    }
+  }
+
+  /// 「测试连接」：GET `{base}/models`，只探一次，不重试（用户要的是即时结论）。
+  ///
+  /// 三件事和以前不同：
+  /// 1. `api.qnaigc.com/v1` 这种漏 scheme、带尾斜杠的地址会被 [normalizeBase] 修正；
+  /// 2. `connectionTimeout` 只管 TCP 建连——对方接了连接却不回包时它永远不触发，
+  ///    这就是「点了没反应」的根因。这里对**建连 + 等响应 + 读 body** 整体加
+  ///    [timeout]（默认 20 秒）硬超时；
+  /// 3. 401/403/404/429/5xx 分别给可操作的中文原因，不再统一说「连接不稳定」。
+  Future<PingResult> ping({Duration timeout = const Duration(seconds: 20)}) async {
+    final watch = Stopwatch()..start();
+    PingResult fail(String message, {int? status}) => PingResult(
+          ok: false,
+          message: message,
+          ms: watch.elapsedMilliseconds,
+          statusCode: status,
+        );
+
+    final base = normalizeBase(cfg.baseUrl);
+    if (base.isEmpty) {
+      return fail('还没填接口地址（例：https://api.qnaigc.com/v1）');
+    }
+    if (cfg.apiKey.trim().isEmpty) {
+      return fail('还没填 API Key，先去设置里粘贴一个');
+    }
+
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      return await _pingOnce(client, base, timeout, watch).timeout(
+        timeout,
+        // 硬超时命中：底层 socket 会在下面的 finally 里被强制拆掉
+        onTimeout: () => fail('等了 ${_secondsText(timeout)} 还没回应（超时），连不上这个地址'),
+      );
     } finally {
       client.close(force: true);
     }
   }
+
+  /// 兼容旧调用：只要一句人话，永远不抛异常。
+  ///
+  /// 新的 UI 用 [ping] 拿 [PingResult]（要显示耗时/决定图标）；仍在等字符串的
+  /// 老代码走这里。
+  Future<String> pingMessage() async {
+    final r = await ping();
+    return r.ok ? '${r.message}（${r.ms}ms）' : r.message;
+  }
+
 
   void dispose() => _http?.close(force: true);
 }

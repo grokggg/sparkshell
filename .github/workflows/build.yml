@@ -108,12 +108,19 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.0.1-apk
-          name: SparkShell 3.0.1 (技能目录提示修正)
+          tag_name: v3.1.0-apk
+          name: SparkShell 3.1.0 (附件直选 + 测试连接修复)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.1.0 — + 号变成真附件；测试连接修好**
+            - 改：+ 号弹出「图片 / 文件」，走系统相册与文件管理器，选完复制进 /root/inbox
+            - 改：只发附件不写字也能发；附件以 chip 显示，可单独摘掉
+            - 改：「跑命令」胶囊改叫「看文件」，插的是人话不是命令
+            - 修：模型设置「测试连接」点了没反应——加转圈、20 秒硬超时、结果就近显示 + SnackBar
+            - 修：Base URL 漏写 https:// 或带尾斜杠自动纠正
+
             **3.0.1 — 技能目录提示修正**
             - 修：技能空库提示写成 `.../files/skills/skills`，按它放文件 AI 永远扫不到
             - 加：空库一键「放入示例技能」（debian-toolchain，示范正确颗粒度）

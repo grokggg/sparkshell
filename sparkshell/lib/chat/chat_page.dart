@@ -18,6 +18,7 @@ import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
 import 'api_config.dart';
+import 'attach.dart';
 import 'llm_client.dart';
 import 'session_store.dart';
 
@@ -45,6 +46,9 @@ class _ChatPageState extends State<ChatPage> {
   static const _ch = MethodChannel('com.xinghuo.sparkshell/pty');
 
   final _input = TextEditingController();
+
+  /// 本轮待发送的附件（容器内路径）。发出去就清空，避免下一句又被带上。
+  final List<String> _pending = <String>[];
   final _scroll = ScrollController();
   final _scaffold = GlobalKey<ScaffoldState>();
   final List<_Msg> _msgs = [];
@@ -285,10 +289,81 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  String _compose(String typed) => composeWithAttachments(typed, _pending);
+
+  /// + 号：系统相册 / 文件管理器，选完复制进 /root/inbox。
+  Future<void> _pickAttach({required bool images}) async {
+    try {
+      final got = images
+          ? await AttachmentPicker.images()
+          : await AttachmentPicker.files();
+      if (!mounted || got.isEmpty) return;
+      setState(() {
+        for (final p in got) {
+          if (!_pending.contains(p)) _pending.add(p);
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  /// 附件条：显示在输入框上方，发出去之前一直可见，点 × 摘掉。
+  Widget _attachStrip() {
+    return SizedBox(
+      height: 32,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        itemCount: _pending.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (_, i) {
+          final name = _pending[i].split('/').last;
+          return InputChip(
+            label: Text(name, style: const TextStyle(fontSize: 12)),
+            avatar: const Icon(Icons.insert_drive_file_outlined, size: 16),
+            visualDensity: VisualDensity.compact,
+            onDeleted: () => setState(() => _pending.removeAt(i)),
+          );
+        },
+      ),
+    );
+  }
+
+  /// + 号弹层：图片 / 文件。这两个是所有人的第一直觉，别再让人手打 @ 路径。
+  Future<void> _showAttachSheet() async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.photo_library_outlined),
+            title: const Text('图片'),
+            subtitle: const Text('从相册选，可多张'),
+            onTap: () => Navigator.pop(ctx, 'images'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.attach_file),
+            title: const Text('文件'),
+            subtitle: const Text('文档、压缩包、音频…'),
+            onTap: () => Navigator.pop(ctx, 'files'),
+          ),
+        ]),
+      ),
+    );
+    if (picked == null) return;
+    await _pickAttach(images: picked == 'images');
+  }
+
   Future<void> _send() async {
-    final text = _input.text.trim();
+    final typed = _input.text.trim();
     final cfg = _cfg;
-    if (text.isEmpty || cfg == null || _busy) return;
+    // 只发附件、不写字也算一条：手机上「发张图问问」不该逼人再补一句。
+    if ((typed.isEmpty && _pending.isEmpty) || cfg == null || _busy) return;
+    final text = _compose(typed);
     if (!cfg.ready) {
       const msg = '还没填 API Key：点 Chat 右上角齿轮，填七牛云的 key（base https://api.qnaigc.com/v1）';
       setState(() => _err = msg);
@@ -296,6 +371,7 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     _input.clear();
+    if (_pending.isNotEmpty) setState(_pending.clear);
     _lastTry = text;
     // 新一轮：令牌必须重建。上一轮那颗已经 cancel 过，永远保持 isCancelled，
     // 复用会让这一轮第一步就被判成「已停止」。
@@ -881,6 +957,9 @@ tags: debian, alpine, toolchain
     );
     var temp = cfg.temperature;
     String? test;
+    // 测试连接：点下去必须立刻有反应——按钮转圈 + 结果就近显示 + SnackBar 兜底。
+    // 以前结果塞在整段设置的最底部（滚动区外），点了像没反应。
+    var testing = false;
 
     await showDialog<void>(
       context: context,
@@ -889,6 +968,20 @@ tags: debian, alpine, toolchain
           title: const Text('模型设置'),
           content: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (test != null)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: (test!.startsWith('✅')
+                            ? Colors.green
+                            : Theme.of(ctx).colorScheme.error)
+                        .withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(test!, style: const TextStyle(fontSize: 12.5)),
+                ),
               TextField(
                 controller: base,
                 decoration: const InputDecoration(
@@ -935,32 +1028,50 @@ tags: debian, alpine, toolchain
                   ),
                 ),
               ]),
-              if (test != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(test!, style: const TextStyle(fontSize: 12)),
-                ),
             ]),
           ),
           actions: [
             TextButton(
-              onPressed: () async {
-                final c = ApiConfig(
-                  baseUrl: base.text,
-                  apiKey: key.text,
-                  model: model.text,
-                  systemPrompt: sys.text,
-                  temperature: temp,
-                );
-                setS(() => test = '测试中…');
-                try {
-                  final r = await LlmClient(c).ping();
-                  setS(() => test = '✅ $r');
-                } catch (e) {
-                  setS(() => test = '❌ $e');
-                }
-              },
-              child: const Text('测试连接'),
+              // 测的过程中禁用，避免连点堆出一串请求
+              onPressed: testing
+                  ? null
+                  : () async {
+                      final c = ApiConfig(
+                        baseUrl: base.text,
+                        apiKey: key.text.trim(),
+                        model: model.text,
+                        systemPrompt: sys.text,
+                        temperature: temp,
+                      );
+                      setS(() {
+                        testing = true;
+                        test = '测试中…（最多等 20 秒）';
+                      });
+                      PingResult r;
+                      try {
+                        r = await LlmClient(c).ping();
+                      } catch (e) {
+                        r = PingResult(ok: false, message: '请求异常：$e', ms: 0);
+                      }
+                      if (!ctx.mounted) return;
+                      setS(() {
+                        testing = false;
+                        test = (r.ok ? '✅ ' : '❌ ') + r.message + ' · ${r.ms}ms';
+                      });
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(
+                          content: Text((r.ok ? '连接正常：' : '连接失败：') + r.message),
+                          duration: const Duration(seconds: 3),
+                        ),
+                      );
+                    },
+              child: testing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('测试连接'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
@@ -1226,8 +1337,9 @@ tags: debian, alpine, toolchain
             children: [
               _pill(Icons.speed, '模型自检', _pingModel),
               const SizedBox(width: 6),
-              _pill(Icons.terminal, '跑命令', () {
-                _input.text = '用 bash 执行：ls -la /root';
+              // 给人看的话，不是给终端看的命令：用户点一下就是一句话，由模型自己决定跑什么
+              _pill(Icons.folder_open_outlined, '看文件', () {
+                _input.text = '看看 /root 目录里有什么，用一句话说清';
                 _input.selection = TextSelection.collapsed(offset: _input.text.length);
               }),
               const SizedBox(width: 6),
@@ -1244,14 +1356,12 @@ tags: debian, alpine, toolchain
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-            child: Row(children: [
-              // 附件/@文件：把 /root/ 预填进输入框，路径由用户接着补
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (_pending.isNotEmpty) _attachStrip(),
+              Row(children: [
               IconButton(
-                tooltip: '插入文件路径',
-                onPressed: () {
-                  _input.text = '${_input.text}@/root/'.trimLeft();
-                  _input.selection = TextSelection.collapsed(offset: _input.text.length);
-                },
+                tooltip: '添加图片或文件',
+                onPressed: _showAttachSheet,
                 icon: const Icon(Icons.add_circle_outline, size: 20),
               ),
               Expanded(
@@ -1283,6 +1393,7 @@ tags: debian, alpine, toolchain
                       onPressed: _send,
                       icon: const Icon(Icons.send),
                     ),
+              ]),
             ]),
           ),
         ),

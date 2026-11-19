@@ -34,7 +34,8 @@ import io.flutter.plugin.common.MethodChannel;
 /**
  * 极简宿主。
  *  - PTY 通道：open/read/write/close（native 实现在 pty_bridge.c）
- *  - IO 通道：pickAndImport / exportFile（Activity Result）+ installApk（拉起系统安装器）
+ *  - IO 通道：pickAndImport / pickAndImportTo / pickImages / pickFiles / exportFile（Activity Result）
+ *    + installApk（拉起系统安装器）。pickImages、pickFiles 是聊天附件用的，固定复制进 /root/inbox。
  *  - 环境准备：prepareRootfs —— 把 APK 内的 rootfs.tar 流式落盘，再用 toybox tar 解包
  *
  * prepareRootfs 返回 String：成功为 "ok"，失败为可直接打印的诊断串（含 tar 退出码/输出/剩余空间）。
@@ -45,8 +46,16 @@ public class MainActivity extends FlutterActivity {
 
     private static final String CHANNEL = "com.xinghuo.sparkshell/pty";
     private static final String IO_CHANNEL = "sparkshell/io";
+    /**
+     * IO 通道的别名。历史 Dart 代码用的是 "sparkshell/io"，聊天页的附件选择器按包名写成了
+     * "com.xinghuo.sparkshell/io"。两个名字挂同一个 handler，谁也不用改。
+     */
+    private static final String IO_CHANNEL_ALIAS = "com.xinghuo.sparkshell/io";
     private static final int REQ_PICK = 4711;
     private static final long MAX_IMPORT = 200L * 1024 * 1024;
+
+    /** 聊天附件统一落到容器的 /root/inbox，便于用户和容器内程序按固定路径找。 */
+    private static final String INBOX_DIR = "/root/inbox";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private MethodChannel.Result pendingPick;   // 选择器是异步的，得先存住 Result
@@ -120,51 +129,66 @@ public class MainActivity extends FlutterActivity {
                     }
                 });
 
-        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), IO_CHANNEL)
-                .setMethodCallHandler(new MethodChannel.MethodCallHandler() {
-                    @Override
-                    public void onMethodCall(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
-                        try {
-                            switch (call.method) {
-                                case "pickAndImport": {
-                                    openPicker(result, "/root/import");
-                                    break;
-                                }
-                                case "pickAndImportTo": {
-                                    String dest = call.argument("destDir");
-                                    openPicker(result, dest == null || dest.isEmpty() ? "/root/import" : dest);
-                                    break;
-                                }
-                                case "exportFile": {
-                                    String guest = call.argument("path");
-                                    if (guest == null) {
-                                        result.error("bad_args", "缺少 path", null);
-                                    } else {
-                                        shareFile(result, guest);
-                                    }
-                                    break;
-                                }
-                                case "installApk": {
-                                    String path = call.argument("path");
-                                    if (path == null || path.trim().isEmpty()) {
-                                        result.error("bad_args", "缺少 path", null);
-                                    } else {
-                                        installApk(result, path.trim());
-                                    }
-                                    break;
-                                }
-                                default:
-                                    result.notImplemented();
-                                    break;
-                            }
-                        } catch (Throwable t) {
-                            result.error("io_error", String.valueOf(t.getMessage()), null);
+        MethodChannel.MethodCallHandler ioHandler = new MethodChannel.MethodCallHandler() {
+            @Override
+            public void onMethodCall(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
+                try {
+                    switch (call.method) {
+                        case "pickAndImport": {
+                            openPicker(result, "/root/import", "*/*");
+                            break;
                         }
+                        case "pickAndImportTo": {
+                            String dest = call.argument("destDir");
+                            openPicker(result, dest == null || dest.isEmpty() ? "/root/import" : dest, "*/*");
+                            break;
+                        }
+                        // 聊天附件：只要图片，允许多选，落点固定为容器 /root/inbox。
+                        case "pickImages": {
+                            openPicker(result, INBOX_DIR, "image/*");
+                            break;
+                        }
+                        // 聊天附件：任意文件（文档、压缩包、音频都行），同样多选、落点 /root/inbox。
+                        case "pickFiles": {
+                            openPicker(result, INBOX_DIR, "*/*");
+                            break;
+                        }
+                        case "exportFile": {
+                            String guest = call.argument("path");
+                            if (guest == null) {
+                                result.error("bad_args", "缺少 path", null);
+                            } else {
+                                shareFile(result, guest);
+                            }
+                            break;
+                        }
+                        case "installApk": {
+                            String path = call.argument("path");
+                            if (path == null || path.trim().isEmpty()) {
+                                result.error("bad_args", "缺少 path", null);
+                            } else {
+                                installApk(result, path.trim());
+                            }
+                            break;
+                        }
+                        default:
+                            result.notImplemented();
+                            break;
                     }
-                });
+                } catch (Throwable t) {
+                    result.error("io_error", String.valueOf(t.getMessage()), null);
+                }
+            }
+        };
+        // 同一个 handler 挂两个通道名：老的 sparkshell/io 继续可用，新的包名通道给附件选择器用。
+        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), IO_CHANNEL)
+                .setMethodCallHandler(ioHandler);
+        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), IO_CHANNEL_ALIAS)
+                .setMethodCallHandler(ioHandler);
     }
 
-    private void openPicker(MethodChannel.Result result, String destDir) {
+    /** 拉起系统文件选择器：mimeType 决定看到的类型（image/* 只看图片），destDir 是容器内落点。 */
+    private void openPicker(MethodChannel.Result result, String destDir, String mimeType) {
         if (pendingPick != null) {
             result.error("busy", "文件选择器已经打开", null);
             return;
@@ -173,7 +197,7 @@ public class MainActivity extends FlutterActivity {
         pendingDest = destDir;
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType("*/*");
+        i.setType(mimeType == null || mimeType.isEmpty() ? "*/*" : mimeType);
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         try {
             startActivityForResult(i, REQ_PICK);
@@ -203,6 +227,11 @@ public class MainActivity extends FlutterActivity {
             uris.add(data.getData());
         }
         final String dest = pendingDest;
+        if (uris.isEmpty()) {
+            // 用户点了「取消」但系统仍回 RESULT_OK 的情况：按取消处理，返回空列表。
+            r.success(new ArrayList<String>());
+            return;
+        }
         new Thread(() -> {
             List<String> ok = new ArrayList<>();
             String err = null;
@@ -211,14 +240,16 @@ public class MainActivity extends FlutterActivity {
                     String guest = importOne(u, dest);
                     if (guest != null) ok.add(guest);
                 } catch (Throwable t) {
-                    err = String.valueOf(t.getMessage());
+                    // 只留一句人能看懂的原因；多个文件失败时以最后一个为准（已经成功的仍会返回）。
+                    String m = t.getMessage();
+                    err = (m == null || m.trim().isEmpty()) ? "读取源文件失败" : m.trim();
                 }
             }
             final List<String> out = ok;
             final String e = err;
             main.post(() -> {
                 if (e != null && out.isEmpty()) {
-                    r.error("import_failed", e, null);
+                    r.error("import_failed", "复制文件到容器失败：" + e, null);
                 } else {
                     r.success(out);
                 }
