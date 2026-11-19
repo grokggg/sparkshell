@@ -87,4 +87,49 @@ void main() {
       );
     });
   });
+
+  group('AttachmentPicker.camera 拍照', () {
+    test('camera() 调 pickCamera，返回单个容器路径而不是列表', () async {
+      var called = '';
+      messenger.setMockMethodCallHandler(io, (call) async {
+        called = call.method;
+        return '/root/inbox/photo-20261119-143012.jpg';
+      });
+
+      final got = await AttachmentPicker.camera();
+      expect(called, 'pickCamera');
+      expect(got, '/root/inbox/photo-20261119-143012.jpg');
+      expect(got, isA<String?>());
+    });
+
+    test('用户取消拍照返回 null，不抛异常', () async {
+      messenger.setMockMethodCallHandler(io, (call) async => null);
+
+      expect(await AttachmentPicker.camera(), isNull);
+    });
+
+    test('没有相机 App：no_camera 翻成一句人话', () async {
+      messenger.setMockMethodCallHandler(io, (call) async {
+        throw PlatformException(code: 'no_camera', message: '设备上没有可用的相机');
+      });
+
+      await expectLater(
+        AttachmentPicker.camera(),
+        throwsA(isA<AttachmentPickerException>()
+            .having((e) => e.message, 'message', contains('没有可用的相机'))),
+      );
+    });
+
+    test('权限不够：permission 给出可操作的中文提示', () async {
+      messenger.setMockMethodCallHandler(io, (call) async {
+        throw PlatformException(code: 'permission', message: '');
+      });
+
+      await expectLater(
+        AttachmentPicker.camera(),
+        throwsA(isA<AttachmentPickerException>()
+            .having((e) => e.message, 'message', contains('系统设置'))),
+      );
+    });
+  });
 }

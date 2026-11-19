@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'api_config.dart';
 import 'retry_policy.dart';
+import 'vision.dart';
 import '../agent/cancel_token.dart';
 
 /// 「用户在途取消」的哨兵异常：不是故障，不重试、不弹错误条。
@@ -45,6 +46,32 @@ class PingResult {
   String toString() => message;
 }
 
+/// 带状态码和响应体的 HTTP 错误。
+///
+/// 为什么不用裸 `HttpException`：图片降级必须看「是不是 400/422」以及
+/// 「响应体里有没有 image/vision 这类词」。把这些信息丢掉只剩一句中文提示，
+/// 上层就只能靠正则抠字符串里的状态码，非常脆。
+/// 实现 [HttpException] 是为了让既有 `on HttpException` 的调用方（聊天页的错误
+/// 翻译）继续正常工作，不用改一圈 catch。
+class LlmHttpException implements HttpException {
+  LlmHttpException(this.message, {this.statusCode, this.body = ''});
+
+  @override
+  final String message;
+
+  /// 服务端状态码；根本没拿到响应时为 null
+  final int? statusCode;
+
+  /// 原始响应体（已被上层读过一遍，这里留档给错误分类用）
+  final String body;
+
+  @override
+  Uri? get uri => null;
+
+  @override
+  String toString() => message;
+}
+
 /// 极简 OpenAI 兼容客户端：POST /chat/completions，`stream: true` 走 SSE。
 ///
 /// 稳定性策略（针对中转站 5xx/522 这类"不是我们代码的错"的故障）：
@@ -52,12 +79,31 @@ class PingResult {
 /// 2. 还不行就自动切到备用接入点（`ApiConfig.backups`），切过去能通就留在那儿；
 /// 3. 全部接入点都失败才抛错，错误文案带"是哪个接入点挂了"。
 class LlmClient {
-  LlmClient(this.cfg, {this.onRetry});
+  LlmClient(
+    this.cfg, {
+    this.onRetry,
+    this.vision = false,
+    this.onVisionFallback,
+  });
 
   final ApiConfig cfg;
 
   /// 重试进度回调：界面拿它显示「连接不稳定，正在重试 2/5…」。
   final void Function(String message)? onRetry;
+
+  /// 本轮是否允许把图片按多模态格式发出去。
+  ///
+  /// 默认 false：绝大多数免费接入点（比如 qiniu/conatus-free）是纯文本模型，
+  /// 收到 image_url 直接 400。只有调用方确认「这一轮要发图 / 用户选了多模态模型」
+  /// 时才打开；关着的时候即使 content 里混了图片块，也不会做降级——因为
+  /// 那本来就不该发生，静默改请求反而会把真正的配置错误掩盖掉。
+  bool vision;
+
+  /// 图片降级回调：服务端明确表示看不了图、我们已经去掉图重发时触发。
+  ///
+  /// 必须让上层知道，不能默默吞掉：用户以为自己发了截图，模型答得却是
+  /// 「你什么都没说」——这一句提示就是让界面告诉用户「这轮只发了文字」。
+  final void Function(String message)? onVisionFallback;
 
   /// 免费中转站的 5xx / 522 / 超时基本都是链路抖动：同一个接入点重试几次就好，
   /// 不换模型、不换接入点（这是用户明确要的行为）。
@@ -105,7 +151,9 @@ class LlmClient {
         final err = await resp.transform(utf8.decoder).join();
         final out = _policy.judge(statusCode: resp.statusCode, body: err);
         reason = out.reason;
-        last = HttpException(out.tip);
+        // 带上状态码和原文：图片降级要靠这两个判断「是不是模型看不懂图」，
+        // 而 400 的重试判定依然走 RetryPolicy（4xx 一律不重试）。
+        last = LlmHttpException(out.tip, statusCode: resp.statusCode, body: err);
         if (!out.retry) throw last; // Key 失效 / 参数错，重试没意义
       } on SocketException catch (e) {
         // 自己 close(force: true) 拆 socket 也会走到这里，不能当网络故障重试
@@ -179,63 +227,91 @@ class LlmClient {
 
   /// `cancel` 非空时：点停止会立刻拆 socket，本流以 [_Cancelled] 结束，
   /// 并且**不会**退回到「整段返回」那条兜底路径（用户已经不想再等了）。
-  Stream<String> chat(List<Map<String, String>> messages, {CancelToken? cancel}) async* {
+  ///
+  /// `messages` 的 `content` 允许是 `String`（纯文本）或 `List`（多模态
+  /// content blocks），原样序列化进 JSON，不在这一层改写形状。
+  Stream<String> chat(
+    List<Map<String, dynamic>> messages, {
+    CancelToken? cancel,
+  }) async* {
     final sys = cfg.systemPrompt.trim();
-    final body = jsonEncode({
-      'model': cfg.model,
-      'stream': true,
-      'temperature': cfg.temperature,
-      'messages': [
-        if (sys.isNotEmpty) {'role': 'system', 'content': sys},
-        ...messages,
-      ],
-    });
-
-    var emitted = false;
-    try {
-      final resp = await _open('/chat/completions', () => body, sse: true, cancel: cancel);
-      await for (final line
-          in resp.transform(utf8.decoder).transform(const LineSplitter())) {
-        if (cancel != null && cancel.isCancelled) throw const _Cancelled();
-        if (!line.startsWith('data:')) continue;
-        final payload = line.substring(5).trim();
-        if (payload == '[DONE]') break;
-        try {
-          final m = jsonDecode(payload) as Map<String, dynamic>;
-          final delta = (m['choices'] as List?)?.isNotEmpty == true
-              ? (m['choices'][0] as Map)['delta'] as Map?
-              : null;
-          final text = delta?['content'] as String?;
-          if (text != null && text.isNotEmpty) {
-            emitted = true;
-            yield text;
-          }
-        } catch (_) {
-          // 单帧坏掉不中断整个流
-        }
-      }
-      return;
-    } on _Cancelled {
-      // 主动停止：不重来、不兜底，安静结束
-      return;
-    } catch (e) {
-      // 停止时 close(force: true) 会以 SocketException / HttpException 的形式
-      // 冒到这里，本质仍是「已取消」，不是链路故障，别去走整段返回
-      if (cancel != null && cancel.isCancelled) return;
-      // 已经吐过字就不重来，避免用户看到重复段落
-      if (emitted) rethrow;
-    }
-
-    // 流式走不通（免费中转常把 SSE 掐断）→ 同一接入点、同一模型，改成整段返回。
-    // 用户明确要求：不换模型、不换接入点，只换传输方式。
-    if (cancel != null && cancel.isCancelled) return;
-    onRetry?.call('流式被中断，改用整段返回（模型仍是 ${cfg.model}）');
-    final msg = await complete([
+    var convo = <Map<String, dynamic>>[
       if (sys.isNotEmpty) {'role': 'system', 'content': sys},
-      ...messages.map((e) => <String, dynamic>{...e}),
-    ], cancel: cancel);
-    final text = (msg['content'] as String?) ?? '';
-    if (text.isNotEmpty) yield text;
+      ...messages,
+    ];
+
+    // 降级只做一次：去掉图还被 400，就不是「模型看不懂图」的问题了，
+    // 再剥一遍也不会变好，只会把真正的报错拖成超时。
+    var visionDegraded = false;
+
+    while (true) {
+      final body = jsonEncode({
+        'model': cfg.model,
+        'stream': true,
+        'temperature': cfg.temperature,
+        'messages': convo,
+      });
+
+      var emitted = false;
+      try {
+        final resp = await _open('/chat/completions', () => body, sse: true, cancel: cancel);
+        await for (final line
+            in resp.transform(utf8.decoder).transform(const LineSplitter())) {
+          if (cancel != null && cancel.isCancelled) throw const _Cancelled();
+          if (!line.startsWith('data:')) continue;
+          final payload = line.substring(5).trim();
+          if (payload == '[DONE]') break;
+          try {
+            final m = jsonDecode(payload) as Map<String, dynamic>;
+            final delta = (m['choices'] as List?)?.isNotEmpty == true
+                ? (m['choices'][0] as Map)['delta'] as Map?
+                : null;
+            final text = delta?['content'] as String?;
+            if (text != null && text.isNotEmpty) {
+              emitted = true;
+              yield text;
+            }
+          } catch (_) {
+            // 单帧坏掉不中断整个流
+          }
+        }
+        return;
+      } on _Cancelled {
+        // 主动停止：不重来、不兜底，安静结束
+        return;
+      } catch (e) {
+        // 停止时 close(force: true) 会以 SocketException / HttpException 的形式
+        // 冒到这里，本质仍是「已取消」，不是链路故障，别去走整段返回
+        if (cancel != null && cancel.isCancelled) return;
+
+        // 服务端明确说「看不了图」：把图摘掉、补一句说明，同一接入点重发一次。
+        // 为什么不直接把 400 抛给用户：用户的意图是「看这张截图」，报错只会让
+        // 他以为整个功能坏了；纯文本模型仍然能读路径干活，降级至少能给出回答。
+        if (!visionDegraded && _tryVisionFallback(e, convo)) {
+          visionDegraded = true;
+          convo = stripImageParts(convo);
+          continue;
+        }
+
+        // 4xx 是「这个请求本身不合法」（模型名错、参数错、Key 没权限），
+        // 换成整段返回只是把同一个请求再发一遍，一定还是 4xx——多一次往返，
+        // 用户多等好几秒才看到真正的错误。直接抛上去。
+        final code = e is LlmHttpException ? e.statusCode : null;
+        if (code != null && code >= 400 && code < 500) rethrow;
+
+        // 已经吐过字就不重来，避免用户看到重复段落
+        if (emitted) rethrow;
+      }
+
+      // 流式走不通（免费中转常把 SSE 掐断）→ 同一接入点、同一模型，改成整段返回。
+      // 用户明确要求：不换模型、不换接入点，只换传输方式。
+      if (cancel != null && cancel.isCancelled) return;
+      onRetry?.call('流式被中断，改用整段返回（模型仍是 ${cfg.model}）');
+      final msg = await complete(convo, cancel: cancel);
+      final text = (msg['content'] as String?) ?? '';
+      if (text.isNotEmpty) yield text;
+      return;
+    }
   }
 
   /// 非流式一轮，供 Agent 工具循环用（工具调用必须拿到完整 tool_calls）。
@@ -244,33 +320,85 @@ class LlmClient {
     List<Map<String, dynamic>>? tools,
     CancelToken? cancel,
   }) async {
-    final hasTools = tools != null && tools.isNotEmpty;
-    final payload = jsonEncode({
-      'model': cfg.model,
-      'messages': messages,
-      'temperature': cfg.temperature,
-      'stream': false,
-      if (hasTools) 'tools': tools,
-      if (hasTools) 'tool_choice': 'auto',
-    });
+    var convo = messages;
+    var visionDegraded = false;
 
-    final resp = await _open('/chat/completions', () => payload, cancel: cancel);
-    if (cancel != null && cancel.isCancelled) throw const _Cancelled();
-    // 响应体可能还在慢慢吐：这里也要接住「socket 被强制拆掉」的异常，
-    // 否则界面会把一次主动停止显示成「连不上模型服务」。
-    String text;
-    try {
-      text = await resp.transform(utf8.decoder).join();
-    } catch (e) {
+    while (true) {
+      final hasTools = tools != null && tools.isNotEmpty;
+      final payload = jsonEncode({
+        'model': cfg.model,
+        'messages': convo,
+        'temperature': cfg.temperature,
+        'stream': false,
+        if (hasTools) 'tools': tools,
+        if (hasTools) 'tool_choice': 'auto',
+      });
+
+      final HttpClientResponse resp;
+      try {
+        resp = await _open('/chat/completions', () => payload, cancel: cancel);
+      } on _Cancelled {
+        rethrow;
+      } catch (e) {
+        if (cancel != null && cancel.isCancelled) throw const _Cancelled();
+        // 整段返回也要能吃下「模型看不了图」：Agent 循环里上游可能带着图，
+        // 不降级的话每一轮都会在同一个 400 上原地打转。
+        if (!visionDegraded && _tryVisionFallback(e, convo)) {
+          visionDegraded = true;
+          convo = stripImageParts(convo);
+          continue;
+        }
+        rethrow;
+      }
+
       if (cancel != null && cancel.isCancelled) throw const _Cancelled();
-      rethrow;
+      // 响应体可能还在慢慢吐：这里也要接住「socket 被强制拆掉」的异常，
+      // 否则界面会把一次主动停止显示成「连不上模型服务」。
+      String text;
+      try {
+        text = await resp.transform(utf8.decoder).join();
+      } catch (e) {
+        if (cancel != null && cancel.isCancelled) throw const _Cancelled();
+        rethrow;
+      }
+      final m = jsonDecode(text) as Map<String, dynamic>;
+      final choices = m['choices'] as List?;
+      if (choices == null || choices.isEmpty) {
+        throw const HttpException('响应里没有 choices');
+      }
+      return (choices.first as Map)['message'] as Map<String, dynamic>;
     }
-    final m = jsonDecode(text) as Map<String, dynamic>;
-    final choices = m['choices'] as List?;
-    if (choices == null || choices.isEmpty) {
-      throw const HttpException('响应里没有 choices');
-    }
-    return (choices.first as Map)['message'] as Map<String, dynamic>;
+  }
+
+  /// 判断这次失败是不是「服务端看不了图」，并当场通知上层。
+  ///
+  /// 判据刻意保守——必须同时满足三条：
+  /// 1. `vision` 开关是开的（关着说明调用方本来就不该发图，静默改请求会掩盖真错误）；
+  /// 2. 状态码是 400 / 422（明确的「请求不合法」，而不是限流/链路抖动）；
+  /// 3. 响应体里出现 image / vision / content 这类词。
+  ///
+  /// 为什么不能只看状态码：模型名写错、参数拼错同样是 400。无脑降级会把用户
+  /// 真正的配置错误吃掉，变成「每次发图都莫名其妙只剩文字」。所以要看 body。
+  bool _tryVisionFallback(Object error, List<Map<String, dynamic>> convo) {
+    if (!vision) return false;
+    if (error is! LlmHttpException) return false;
+    if (!looksLikeVisionRejection(error.statusCode, error.body)) return false;
+    if (!hasImageParts(convo)) return false;
+
+    final msg = '当前模型（${cfg.model}）看不了图片，已自动去掉图片、只发文字重试';
+    onVisionFallback?.call(msg);
+    // 顺手挂到状态条上：用户能立刻看到「这轮为什么只有文字」，
+    // 而不是等模型回答完才发现图没生效。
+    onRetry?.call(msg);
+    return true;
+  }
+
+  /// 服务端是不是在说「我看不了这张图」。
+  static bool looksLikeVisionRejection(int? status, String body) {
+    if (status != 400 && status != 422) return false;
+    final b = body.toLowerCase();
+    const keys = ['image', 'vision', 'multimodal', 'multi-modal', 'modality', 'content'];
+    return keys.any(b.contains);
   }
 
   /// 把用户手填的地址补成可用的 base URL：

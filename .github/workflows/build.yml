@@ -41,6 +41,15 @@ jobs:
           grep -n 'applicationId\|targetSdk\|abortOnError' android/app/build.gradle || true
           flutter pub get
 
+      # ---------- 0) 静态检查 + 测试（跑在 CI 上，因为沙箱里没有 git/完整 SDK）----------
+      - name: Analyze & test
+        working-directory: sparkshell
+        run: |
+          set -e
+          git config --global --add safe.directory "$PWD"
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test --reporter=expanded
+
       # ---------- 1) 小包：Alpine 3.6 MB，只为 30 秒验证 proot 链路 ----------
       - name: Rootfs (alpine, 3.6 MB)
         run: |
@@ -108,12 +117,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.1.0-apk
-          name: SparkShell 3.1.0 (附件直选 + 测试连接修复)
+          tag_name: v3.2.0-apk
+          name: SparkShell 3.2.0 (截图直读 + 拍照)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.2.0 — 截图能直接看懂；拍照入口**
+            - 加：图片按 OpenAI 多模态格式发（`image_url` + base64），1.2MB 上限
+            - 加：接入点看不了图时自动摘图重发，并明确告诉用户“这轮只发了文字”
+            - 加：+ 号里「拍一张」（`ACTION_IMAGE_CAPTURE` + FileProvider，直接进 /root/inbox）
+            - 加：CI 现在会跑 `flutter analyze` + `flutter test`，测试不过不发包
+
             **3.1.0 — + 号变成真附件；测试连接修好**
             - 改：+ 号弹出「图片 / 文件」，走系统相册与文件管理器，选完复制进 /root/inbox
             - 改：只发附件不写字也能发；附件以 chip 显示，可单独摘掉

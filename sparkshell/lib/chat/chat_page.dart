@@ -18,6 +18,7 @@ import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
 import 'api_config.dart';
+import 'vision.dart';
 import 'attach.dart';
 import 'llm_client.dart';
 import 'session_store.dart';
@@ -311,6 +312,21 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  /// 拍一张：原生相机拍完直接复制进容器，回来当附件使。
+  Future<void> _takePhoto() async {
+    try {
+      final path = await AttachmentPicker.camera();
+      if (!mounted || path == null || path.isEmpty) return;
+      setState(() {
+        if (!_pending.contains(path)) _pending.add(path);
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
   /// 附件条：显示在输入框上方，发出去之前一直可见，点 × 摘掉。
   Widget _attachStrip() {
     return SizedBox(
@@ -346,6 +362,12 @@ class _ChatPageState extends State<ChatPage> {
             onTap: () => Navigator.pop(ctx, 'images'),
           ),
           ListTile(
+            leading: const Icon(Icons.photo_camera_outlined),
+            title: const Text('拍一张'),
+            subtitle: const Text('用相机拍完直接发'),
+            onTap: () => Navigator.pop(ctx, 'camera'),
+          ),
+          ListTile(
             leading: const Icon(Icons.attach_file),
             title: const Text('文件'),
             subtitle: const Text('文档、压缩包、音频…'),
@@ -355,7 +377,43 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
     if (picked == null) return;
+    if (picked == 'camera') {
+      await _takePhoto();
+      return;
+    }
     await _pickAttach(images: picked == 'images');
+  }
+
+  /// 把这一轮的图片塞进「最后一条 user 消息」的 content。
+  ///
+  /// 为什么一定要改最后一条、而不是追加一条新消息：
+  /// 模型看到的是完整历史，追加会变成"用户又单独说了一句图"，问句和图脱节，
+  /// 更容易答偏。图本来就是那句话的一部分。
+  Future<void> _applyVision(
+    List<Map<String, dynamic>> history,
+    String text,
+    List<String> images,
+  ) async {
+    if (images.isEmpty || history.isEmpty) return;
+    final content = await buildUserContent(
+      text,
+      images,
+      onReject: (path, reason) {
+        final name = path.split('/').last;
+        if (mounted) {
+          setState(() => _err = '图片没带上：$name —— $reason');
+        }
+      },
+    );
+    replaceLastUserContent(history, content);
+  }
+
+  /// 接入点看不了图、已经自动去掉图片重发时，必须让用户知道。
+  /// 否则他以为自己发了截图，模型却在答「你什么都没说」。
+  void _onVisionFallback(String message) {
+    if (!mounted) return;
+    setState(() => _err = message);
+    TerminalBus.instance.mirror('\x1b[33m! $message\x1b[0m\r\n');
   }
 
   Future<void> _send() async {
@@ -364,6 +422,9 @@ class _ChatPageState extends State<ChatPage> {
     // 只发附件、不写字也算一条：手机上「发张图问问」不该逼人再补一句。
     if ((typed.isEmpty && _pending.isEmpty) || cfg == null || _busy) return;
     final text = _compose(typed);
+    // 图片单独记一份：_pending 发完就清空了，而这一轮要拿它决定
+    // ①content 里塞不塞 image_url ②要不要开 vision 降级通道
+    final images = _pending.where(isImagePath).toList(growable: false);
     if (!cfg.ready) {
       const msg = '还没填 API Key：点 Chat 右上角齿轮，填七牛云的 key（base https://api.qnaigc.com/v1）';
       setState(() => _err = msg);
@@ -381,7 +442,7 @@ class _ChatPageState extends State<ChatPage> {
     _stopShown = false;
     _stopping = false;
     if (_agent) {
-      await _sendAgent(text, cfg, token);
+      await _sendAgent(text, cfg, token, images);
       return;
     }
     final reply = _Msg('assistant', '');
@@ -395,11 +456,14 @@ class _ChatPageState extends State<ChatPage> {
 
     final history = _msgs
         .where((m) => m.text.isNotEmpty)
-        .map((m) => {'role': m.role, 'content': m.text})
+        .map((m) => <String, dynamic>{'role': m.role, 'content': m.text})
         .toList();
+    await _applyVision(history, text, images);
 
     final client = _client = LlmClient(
       cfg,
+      vision: images.isNotEmpty,
+      onVisionFallback: _onVisionFallback,
       onRetry: (m) {
         if (mounted) setState(() => _status = m);
       },
@@ -468,7 +532,12 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   /// Agent 模式：模型要工具 → 弹窗审批 → 容器内执行 → 结果回灌。
-  Future<void> _sendAgent(String text, ApiConfig cfg, CancelToken token) async {
+  Future<void> _sendAgent(
+    String text,
+    ApiConfig cfg,
+    CancelToken token, [
+    List<String> images = const <String>[],
+  ]) async {
     setState(() {
       _msgs.add(_Msg('user', text));
       _busy = true;
@@ -497,10 +566,13 @@ class _ChatPageState extends State<ChatPage> {
         .where((m) => m.role != 'tool' && m.text.trim().isNotEmpty)
         .map((m) => <String, dynamic>{'role': m.role, 'content': m.text})
         .toList();
+    await _applyVision(history, text, images);
 
     final runner = AgentRunner(
       cfg: cfg,
       cancel: token,
+      vision: images.isNotEmpty,
+      onVisionFallback: _onVisionFallback,
       onStatus: (m) {
         // 停止后的「正在停止…」不覆盖：旧 run 可能在收尾时回调一条重试文案
         if (mounted && identical(_token, token)) setState(() => _status = m);

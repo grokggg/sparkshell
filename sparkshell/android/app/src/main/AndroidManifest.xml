@@ -51,6 +51,11 @@
 
          In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
     <queries>
+        <!-- 拍照：ActionMediaCapture 的可见性声明。targetSdk=28 时还没强制，但一旦上调
+             Android 11+ 的包可见性会让相机变成"看不见"，从而误报 no_camera。 -->
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

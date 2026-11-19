@@ -4,6 +4,8 @@
     <cache-path name="exports" path="exports/" />
     <!-- 应用内更新下载的 APK：filesDir/updates（系统安装器要读） -->
     <files-path name="updates" path="updates/" />
+    <!-- 拍照临时文件：filesDir/camera_tmp（相机 App 经 FileProvider 写入，回包后复制进 rootfs 并删除） -->
+    <files-path name="camera_tmp" path="camera_tmp/" />
     <!-- 兜底：若以后把下载目录挪到 cacheDir/updates 也能授权 -->
     <cache-path name="cache_updates" path="updates/" />
 </paths>

@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
 
@@ -23,8 +24,11 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
@@ -34,8 +38,9 @@ import io.flutter.plugin.common.MethodChannel;
 /**
  * 极简宿主。
  *  - PTY 通道：open/read/write/close（native 实现在 pty_bridge.c）
- *  - IO 通道：pickAndImport / pickAndImportTo / pickImages / pickFiles / exportFile（Activity Result）
- *    + installApk（拉起系统安装器）。pickImages、pickFiles 是聊天附件用的，固定复制进 /root/inbox。
+ *  - IO 通道：pickAndImport / pickAndImportTo / pickImages / pickFiles / pickCamera / exportFile（Activity Result）
+ *    + installApk（拉起系统安装器）。pickImages、pickFiles 是聊天附件用的，固定复制进 /root/inbox；
+ *    pickCamera 走系统相机，先写私有目录临时文件，再复制进 /root/inbox 并删掉临时文件。
  *  - 环境准备：prepareRootfs —— 把 APK 内的 rootfs.tar 流式落盘，再用 toybox tar 解包
  *
  * prepareRootfs 返回 String：成功为 "ok"，失败为可直接打印的诊断串（含 tar 退出码/输出/剩余空间）。
@@ -52,7 +57,11 @@ public class MainActivity extends FlutterActivity {
      */
     private static final String IO_CHANNEL_ALIAS = "com.xinghuo.sparkshell/io";
     private static final int REQ_PICK = 4711;
+    /** 拍照单独一个请求码：相机是「单张 Result」，和文件选择器的多选回包不能混在一个分支里。 */
+    private static final int REQ_CAMERA = 4712;
     private static final long MAX_IMPORT = 200L * 1024 * 1024;
+    /** 相机写盘用的私有目录（filesDir 下），交给相机 App 之前必须经 FileProvider 授权。 */
+    private static final String CAMERA_TMP_DIR = "camera_tmp";
 
     /** 聊天附件统一落到容器的 /root/inbox，便于用户和容器内程序按固定路径找。 */
     private static final String INBOX_DIR = "/root/inbox";
@@ -60,6 +69,9 @@ public class MainActivity extends FlutterActivity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private MethodChannel.Result pendingPick;   // 选择器是异步的，得先存住 Result
     private String pendingDest = "/root/import";
+    /** 相机同理，但要单独存：一次只拍一张，回包直接是 String，不能跟 pendingPick 抢。 */
+    private MethodChannel.Result pendingCamera;
+    private File pendingCameraFile;
 
     @Override
     public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
@@ -153,6 +165,11 @@ public class MainActivity extends FlutterActivity {
                             openPicker(result, INBOX_DIR, "*/*");
                             break;
                         }
+                        // 聊天附件：拍一张。走系统相机，结果同样是 /root/inbox 下的容器路径。
+                        case "pickCamera": {
+                            openCamera(result);
+                            break;
+                        }
                         case "exportFile": {
                             String guest = call.argument("path");
                             if (guest == null) {
@@ -207,9 +224,122 @@ public class MainActivity extends FlutterActivity {
         }
     }
 
+    /**
+     * 拉起系统相机拍一张，照片先落到 filesDir/camera_tmp 的临时文件。
+     *
+     * 为什么要 FileProvider：相机是另一个进程，它拿不到我们私有目录的 file:// 路径（7.0 起
+     * 直接 FileUriExposedException）；必须换成 content:// 并显式授予写权限。
+     * authority 必须用 getPackageName()+".fileprovider" —— 清单里写的是 ${applicationId}.fileprovider，
+     * 而本工程的 applicationId（com.grokggg.sparkshell）和 namespace（com.xinghuo.sparkshell）
+     * 并不一致，用 BuildConfig.APPLICATION_ID / 硬编码包名都会在这里炸掉。
+     */
+    private void openCamera(MethodChannel.Result result) {
+        if (pendingCamera != null) {
+            result.error("busy", "相机已经打开", null);
+            return;
+        }
+        File shot = null;
+        try {
+            File dir = new File(getApplicationContext().getFilesDir(), CAMERA_TMP_DIR);
+            // 老临时文件（上次被杀进程留下的）顺手清掉，避免越积越多。
+            cleanCameraTmp(dir);
+            if (!dir.mkdirs() && !dir.isDirectory()) {
+                result.error("camera_failed", "无法创建拍照临时目录", null);
+                return;
+            }
+            shot = new File(dir, "shot-" + System.currentTimeMillis() + ".jpg");
+            Uri out = FileProvider.getUriForFile(
+                    getApplicationContext(),
+                    getPackageName() + ".fileprovider",
+                    shot);
+
+            Intent i = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            i.putExtra(MediaStore.EXTRA_OUTPUT, out);
+            // 相机进程要往这个 URI 里写，读权限一并给（部分 ROM 会先读后写）。
+            i.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            pendingCamera = result;
+            pendingCameraFile = shot;
+            try {
+                startActivityForResult(i, REQ_CAMERA);
+            } catch (ActivityNotFoundException e) {
+                pendingCamera = null;
+                pendingCameraFile = null;
+                shot.delete();
+                result.error("no_camera", "设备上没有可用的相机", null);
+            }
+        } catch (Throwable t) {
+            pendingCamera = null;
+            pendingCameraFile = null;
+            if (shot != null) shot.delete();
+            result.error("camera_failed", "调起相机失败: " + t.getMessage(), null);
+        }
+    }
+
+    /** camera_tmp 里超过一天的文件直接删，正常情况拍照失败也会删，这里只是兜底。 */
+    private static void cleanCameraTmp(File dir) {
+        File[] old = dir.listFiles();
+        if (old == null) return;
+        long cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000;
+        for (File f : old) {
+            if (f.isFile() && f.lastModified() < cutoff) f.delete();
+        }
+    }
+
+    /** 相机回包：RESULT_OK 就把临时文件复制进容器，返回容器路径；取消返回 null。 */
+    private void onCameraResult(int resultCode, Intent data) {
+        final MethodChannel.Result r = pendingCamera;
+        final File shot = pendingCameraFile;
+        pendingCamera = null;
+        pendingCameraFile = null;
+        if (r == null) {
+            if (shot != null) shot.delete();
+            return;
+        }
+        if (resultCode != Activity.RESULT_OK) {
+            // 用户点了取消 / 按返回键：按取消处理，不留垃圾文件。
+            if (shot != null) shot.delete();
+            r.success(null);
+            return;
+        }
+        if (shot == null || !shot.isFile() || shot.length() == 0) {
+            // 有的 ROM 会回 RESULT_OK 但其实没写文件（相机崩了 / 没给写权限）。
+            if (shot != null) shot.delete();
+            r.error("camera_failed", "相机没有返回照片，请重试", null);
+            return;
+        }
+        new Thread(() -> {
+            String guest = null;
+            String err = null;
+            try {
+                guest = importPhoto(shot, INBOX_DIR);
+            } catch (Throwable t) {
+                String m = t.getMessage();
+                err = (m == null || m.trim().isEmpty()) ? "读取照片失败" : m.trim();
+            } finally {
+                // 临时文件使命结束：已经复制进 rootfs，原件删掉。
+                shot.delete();
+            }
+            final String g = guest;
+            final String e = err;
+            main.post(() -> {
+                if (g != null) {
+                    r.success(g);
+                } else {
+                    r.error("import_failed", "照片复制到容器失败：" + e, null);
+                }
+            });
+        }).start();
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        // 相机与文件选择器各走各的分支，pendingPick / pendingCamera 互不影响。
+        if (requestCode == REQ_CAMERA) {
+            onCameraResult(resultCode, data);
+            return;
+        }
         if (requestCode != REQ_PICK) return;
         final MethodChannel.Result r = pendingPick;
         pendingPick = null;
@@ -259,26 +389,57 @@ public class MainActivity extends FlutterActivity {
 
     /** 把一个 content:// 复制进 rootfs，返回容器路径。 */
     private String importOne(Uri uri, String destDir) throws Exception {
+        File target = reserveTarget(destDir, displayName(uri));
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("读不到 " + uri);
+            copyStreamTo(in, target);
+        }
+        return guestPath(destDir, target);
+    }
+
+    /** 把相机临时文件复制进 rootfs，名字用拍照时间，便于在容器里排序辨认。 */
+    private String importPhoto(File photo, String destDir) throws Exception {
+        String name = "photo-"
+                + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
+                + ".jpg";
+        File target = reserveTarget(destDir, name);
+        try (InputStream in = new FileInputStream(photo)) {
+            copyStreamTo(in, target);
+        }
+        return guestPath(destDir, target);
+    }
+
+    /**
+     * 在 rootfs 的 destDir 下占一个不重名的文件名（目录顺手建好）。
+     * 文件和照片共用这套规则，改名/去重只有一处。
+     */
+    private File reserveTarget(String destDir, String name) throws Exception {
         File rootfs = new File(getApplicationContext().getFilesDir(), "rootfs");
-        String name = displayName(uri);
         File dir = new File(rootfs, destDir.startsWith("/") ? destDir.substring(1) : destDir);
         if (!dir.mkdirs() && !dir.isDirectory()) throw new Exception("无法创建目录 " + dir);
-        File target = unique(dir, name);
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             OutputStream out = new FileOutputStream(target)) {
-            if (in == null) throw new Exception("读不到 " + uri);
+        return unique(dir, sanitize(name));
+    }
+
+    /** 复制流到 target；失败或超限时把半截文件删掉，别让模型读到坏文件。 */
+    private void copyStreamTo(InputStream in, File target) throws Exception {
+        boolean done = false;
+        try (InputStream src = in; OutputStream out = new FileOutputStream(target)) {
             byte[] buf = new byte[1 << 16];
             long total = 0;
             int n;
-            while ((n = in.read(buf)) > 0) {
+            while ((n = src.read(buf)) > 0) {
                 total += n;
-                if (total > MAX_IMPORT) {
-                    target.delete();
-                    throw new Exception("文件超过 200MB");
-                }
+                if (total > MAX_IMPORT) throw new Exception("文件超过 200MB");
                 out.write(buf, 0, n);
             }
+            done = true;
+        } finally {
+            if (!done) target.delete();
         }
+    }
+
+    /** 容器内的绝对路径，如 /root/inbox/photo-20261119-143012.jpg。 */
+    private static String guestPath(String destDir, File target) {
         String guestDir = destDir.startsWith("/") ? destDir : "/" + destDir;
         return (guestDir.endsWith("/") ? guestDir : guestDir + "/") + target.getName();
     }

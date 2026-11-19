@@ -62,6 +62,27 @@ class AttachmentPicker {
     }
   }
 
+  /// 调系统相机拍一张（单张，不是列表）。
+  ///
+  /// 返回容器内路径，如 `/root/inbox/photo-20261119-143012.jpg`；
+  /// 用户取消返回 null；设备没有相机 App 时抛 [AttachmentPickerException]（code `no_camera`）。
+  ///
+  /// 原生侧会先把照片写进 `filesDir/camera_tmp` 的临时文件，复制进容器后立刻删掉，
+  /// 所以这里拿到的路径一定在 `/root/inbox` 里，宿主上的临时文件不会残留。
+  static Future<String?> camera() async {
+    try {
+      final res = await _channel.invokeMethod<String>('pickCamera');
+      final path = (res ?? '').trim();
+      return path.isEmpty ? null : path;
+    } on MissingPluginException {
+      throw AttachmentPickerException(
+        '当前环境不支持拍照：原生通道 com.xinghuo.sparkshell/io 不可用',
+      );
+    } on PlatformException catch (e) {
+      throw AttachmentPickerException(_explain(e, '照片'));
+    }
+  }
+
   static String _explain(PlatformException e, String label) {
     final detail = (e.message ?? '').trim();
     switch (e.code) {
@@ -69,6 +90,15 @@ class AttachmentPicker {
         return '系统选择器正在使用中，请先完成上一次选择';
       case 'no_picker':
         return '设备上没有可用的文件选择器${detail.isEmpty ? '' : '：$detail'}';
+      case 'no_camera':
+        // 原生侧这句已经是人话，直接透传；兜底再给一句。
+        return detail.isEmpty ? '设备上没有可用的相机' : detail;
+      case 'permission':
+        return detail.isEmpty
+            ? '没有相机权限，请在系统设置里允许 SparkShell 使用相机'
+            : '相机权限不足：$detail。可在系统设置里允许 SparkShell 使用相机';
+      case 'camera_failed':
+        return detail.isEmpty ? '拍照失败，请重试' : detail;
       case 'import_failed':
         return detail.isEmpty ? '复制$label到容器失败' : detail;
       case 'bad_args':

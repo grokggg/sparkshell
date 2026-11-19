@@ -38,6 +38,8 @@ class AgentRunner {
     this.maxSteps = 12,
     this.onStatus,
     this.cancel,
+    this.vision = false,
+    this.onVisionFallback,
   });
 
   final ApiConfig cfg;
@@ -54,6 +56,15 @@ class AgentRunner {
 
   /// 用户「停止」开关。可空：老调用点不传就是原来那种跑完为止的行为。
   final CancelToken? cancel;
+
+  /// 这一轮要不要把图片按多模态格式发出去。
+  ///
+  /// 只有「用户这次真的附了图、且调用方判断接入点能读懂图」才打开；
+  /// 关着的时候即使消息里混进图片块也不做降级——那属于调用方的 bug，不该被静默掩盖。
+  final bool vision;
+
+  /// 服务端表示看不了图、我们已去掉图片重发时的回调（界面必须告诉用户「这轮只发了文字」）。
+  final void Function(String message)? onVisionFallback;
 
   /// 文本协议提示只说一次
   bool _toldTextProtocol = false;
@@ -193,6 +204,8 @@ class AgentRunner {
     final client = LlmClient(
       cfg,
       onRetry: (m) => onStatus?.call(m),
+      vision: vision,
+      onVisionFallback: onVisionFallback,
     );
     onStatus?.call(null);
     try {
