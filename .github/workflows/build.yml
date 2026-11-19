@@ -117,12 +117,19 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.2.0-apk
-          name: SparkShell 3.2.0 (截图直读 + 拍照)
+          tag_name: v3.3.0-apk
+          name: SparkShell 3.3.0 (proot 对齐 + 附件导入加固)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.3.0 — 按 dsh-go 逆向资料对齐 proot；附件导入加固**
+            - 改：交互式终端启动加 `--kill-on-exit`（依据 libproot.so 伪代码 0x1167cc/0x127018），关终端不再留容器进程
+            - 守：一次性命令**不**加该旗标，`nohup … &` 的后台任务才不会被一起杀掉（有单测钉住）
+            - 改：附件导入先看 provider 声明的 SIZE 再复制，300MB 视频不必搬一半才报错
+            - 改：只认 content:// 与 file://，其它 scheme 直接拒；单次最多 20 个文件
+            - 加：`docs/proot-parity.md`（逆向对照报告，含证据地址）
+
             **3.2.0 — 截图能直接看懂；拍照入口**
             - 加：图片按 OpenAI 多模态格式发（`image_url` + base64），1.2MB 上限
             - 加：接入点看不了图时自动摘图重发，并明确告诉用户“这轮只发了文字”

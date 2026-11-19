@@ -107,7 +107,9 @@ class LinuxEnv {
       'cd ${workdir.isEmpty ? '/' : workdir} 2>/dev/null || cd /; $cmd';
 
   /// 在容器内跑一条命令（供 Agent 工具调用）。stdout/stderr 合并返回。
-  Future<ProcessResult> execShell(String cmd, {String workdir = '/root'}) async {
+
+
+Future<ProcessResult> execShell(String cmd, {String workdir = '/root'}) async {
     final rootfs = _rootfs;
     final base = await _filesDir();
     if (rootfs == null || base == null) {
@@ -122,7 +124,7 @@ class LinuxEnv {
     return Process.run(
       '$files/proot/proot',
       [
-        '--link2symlink', '-0', '-r', rootfs,
+        ...kProotExecFlags.split(' '), '-r', rootfs,
         '-b', '/dev', '-b', '/proc', '-b', '/sys', '-b', '/sdcard', '-b', '/storage',
         ...args,
       ],
@@ -167,21 +169,8 @@ class LinuxEnv {
 
   Future<String> _launchScript(String base, String rootfs, String tmp) async {
     final sh = File('$base/proot/start.sh');
-    final body = '''#!/system/bin/sh
-export LD_LIBRARY_PATH=$base/proot
-export PROOT_TMP_DIR=$tmp
-export PROOT_L2S_DIR=$base/.l2s
-SHELL_BIN=/bin/bash
-[ -x $rootfs/bin/bash ] || [ -x $rootfs/usr/bin/bash ] || SHELL_BIN=/bin/sh
-exec $base/proot/proot --link2symlink -0 \\
-  -r $rootfs \\
-  -b /dev -b /proc -b /sys -b /storage -b /sdcard \\
-  -w /root \\
-  /usr/bin/env -i HOME=/root TERM=xterm-256color LANG=C.UTF-8 \\
-  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \\
-  \$SHELL_BIN -l
-''';
-    await sh.writeAsString(body, flush: true);
+    await sh.parent.create(recursive: true);
+    await sh.writeAsString(launchScriptBody(base: base, rootfs: rootfs, tmp: tmp), flush: true);
     if (Platform.isAndroid) {
       await Process.run('/system/bin/chmod', ['700', sh.path]);
     }
@@ -196,3 +185,41 @@ exec $base/proot/proot --link2symlink -0 \\
     }
   }
 }
+
+/// 交互式终端真正执行的启动脚本（render 成文本来写盘）。
+///
+/// 抽成顶层纯函数只为一件事：能测。`kProotInteractiveFlags` 这一行如果哪天被改回
+/// 不带 `--kill-on-exit`，用户关掉终端后容器里的进程会留在后台，而这种回归
+/// 在界面测试里看不出来。
+String launchScriptBody({
+  required String base,
+  required String rootfs,
+  required String tmp,
+}) {
+  return """#!/system/bin/sh
+export LD_LIBRARY_PATH=$base/proot
+export PROOT_TMP_DIR=$tmp
+export PROOT_L2S_DIR=$base/.l2s
+SHELL_BIN=/bin/bash
+[ -x $rootfs/bin/bash ] || [ -x $rootfs/usr/bin/bash ] || SHELL_BIN=/bin/sh
+exec $base/proot/proot ${kProotInteractiveFlags} \\
+  -r $rootfs \\
+  -b /dev -b /proc -b /sys -b /storage -b /sdcard \\
+  -w /root \\
+  /usr/bin/env -i HOME=/root TERM=xterm-256color LANG=C.UTF-8 \\
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \\
+  \$SHELL_BIN -l
+""";
+}
+
+/// 交互式 shell 用的旗标。
+///
+/// `--kill-on-exit` 依据 dsh-go 1.0.15 的 `libproot.so` 伪代码（0x1167cc 参数解析、
+/// 0x127018 生效点：退出时 SIGKILL 全部 tracee）。我们和它用的是同一份 proot
+/// （sha256 f3a2b3f2…，5.1.107.102），实测二进制里有 `kill-on-exit` 字面串。
+///
+/// 只给交互式会话加：用户关掉终端时，容器里的 vim/npm/python 不该在后台烂着。
+/// 一次性命令（execShell）**不能**加——它也要服务 `nohup … &` 这类后台任务，
+/// 一加就在 proot 退出时把任务一起杀了，表现为「后台任务永远不返回/一启动就死」。
+const String kProotInteractiveFlags = '--link2symlink -0 --kill-on-exit';
+const String kProotExecFlags = '--link2symlink -0';

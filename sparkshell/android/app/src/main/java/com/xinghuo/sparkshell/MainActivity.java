@@ -60,6 +60,8 @@ public class MainActivity extends FlutterActivity {
     /** 拍照单独一个请求码：相机是「单张 Result」，和文件选择器的多选回包不能混在一个分支里。 */
     private static final int REQ_CAMERA = 4712;
     private static final long MAX_IMPORT = 200L * 1024 * 1024;
+    /** 一次最多选 20 个：再多就不是「发个附件」，而是批量搬运，容易把容器塞满/把界面卡死。 */
+    private static final int MAX_PICK = 20;
     /** 相机写盘用的私有目录（filesDir 下），交给相机 App 之前必须经 FileProvider 授权。 */
     private static final String CAMERA_TMP_DIR = "camera_tmp";
 
@@ -362,6 +364,10 @@ public class MainActivity extends FlutterActivity {
             r.success(new ArrayList<String>());
             return;
         }
+        if (uris.size() > MAX_PICK) {
+            r.error("too_many", "一次最多选 " + MAX_PICK + " 个，这次选了 " + uris.size() + " 个", null);
+            return;
+        }
         new Thread(() -> {
             List<String> ok = new ArrayList<>();
             String err = null;
@@ -389,6 +395,17 @@ public class MainActivity extends FlutterActivity {
 
     /** 把一个 content:// 复制进 rootfs，返回容器路径。 */
     private String importOne(Uri uri, String destDir) throws Exception {
+        // 只认系统选择器给的两种 scheme。file:// 虽然少见，但用户从「最近」里也可能拖进来；
+        // 其它（http/ftp/自定义 provider）一旦放进 openInputStream 就是任人摆布，直接拒。
+        String scheme = uri.getScheme();
+        if (!"content".equals(scheme) && !"file".equals(scheme)) {
+            throw new Exception("不支持这种来源：" + scheme);
+        }
+        // 先看元数据再动流：手机相册里 300MB 的视频，不该等复制到一半才发现超限。
+        long size = declaredSize(uri);
+        if (size > MAX_IMPORT) {
+            throw new Exception("文件超过 200MB（实际 " + (size / 1024 / 1024) + "MB）");
+        }
         File target = reserveTarget(destDir, displayName(uri));
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in == null) throw new Exception("读不到 " + uri);
@@ -446,7 +463,8 @@ public class MainActivity extends FlutterActivity {
 
     private String displayName(Uri uri) {
         String name = null;
-        try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+        try (Cursor c = getContentResolver().query(
+                uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (c != null && c.moveToFirst()) {
                 int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                 if (idx >= 0) name = c.getString(idx);
@@ -455,6 +473,31 @@ public class MainActivity extends FlutterActivity {
         }
         if (name == null) name = uri.getLastPathSegment();
         return sanitize(name == null ? "unnamed" : name);
+    }
+
+    /**
+     * provider 声明的文件大小；拿不到就回 -1（表示未知，交给流里那个 200MB 兜底）。
+     *
+     * 只投影 SIZE 一列：有的 provider 列很多、还会顺手查云端，把整行都查下来很慢。
+     */
+    private long declaredSize(Uri uri) {
+        if (!"content".equals(uri.getScheme())) {
+            try {
+                File f = new File(uri.getPath() == null ? "" : uri.getPath());
+                return f.exists() ? f.length() : -1L;
+            } catch (Throwable ignored) {
+                return -1L;
+            }
+        }
+        try (Cursor c = getContentResolver().query(
+                uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.SIZE);
+                if (idx >= 0 && !c.isNull(idx)) return c.getLong(idx);
+            }
+        } catch (Throwable ignored) {
+        }
+        return -1L;
     }
 
     /** 去掉路径分隔符与非法字符，杜绝 "../x" 这类名字。 */

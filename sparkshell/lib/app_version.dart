@@ -2,5 +2,5 @@
 /// 所以集中一处：改版本只改 pubspec 和这两个常量。
 library;
 
-const String appVersion = '3.2.0';
-const int appCode = 35;
+const String appVersion = '3.3.0';
+const int appCode = 36;
