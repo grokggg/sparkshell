@@ -982,6 +982,11 @@ class _SettingsPageState extends State<SettingsPage>
     final endpoint = _endpoint();
     final known = cfg.vault.forEndpoint(endpoint).any((e) => e.id == id);
     final isNew = known ? false : cfg.vault.add(id, baseUrl: endpoint);
+    // 手填 = 表态要长期用：直接固定，永不参与淘汰。
+    // （用户原话「必须填上就固定住」——不钉住的话，拉取几百个模型后仍可能被挤掉。）
+    if (!cfg.vault.forEndpoint(endpoint).any((e) => e.id == id && e.pinned)) {
+      cfg.vault.pin(id, baseUrl: endpoint);
+    }
     cfg.vault.markUsed(id);
     setState(() {
       _model.text = id; // 当前模型跟着切；列表保留，不清空
