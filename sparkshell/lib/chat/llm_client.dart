@@ -280,7 +280,7 @@ class LlmClient {
     CancelToken? cancel,
     String? extraSystem,
   }) async* {
-    final convo = <Map<String, dynamic>>[
+    var convo = <Map<String, dynamic>>[
       ..._systemMessages(extraSystem),
       ...messages,
     ];
