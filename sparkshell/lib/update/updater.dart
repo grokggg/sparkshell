@@ -376,7 +376,7 @@ class Updater {
           total > 4 * 1024 * 1024) {
         await resp.drain<void>();
         await sink?.close();
-        await _downloadRanges(info.url, part, total, onProgress);
+        await _downloadRanges(info.url, part, total, onProgress: onProgress);
         received = total;
       } else {
       if (resp.contentLength > 0) total = resp.contentLength;
