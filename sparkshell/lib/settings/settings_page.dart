@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:sparkshell/app_version.dart';
 import 'package:sparkshell/chat/api_config.dart';
 import 'package:sparkshell/chat/llm_client.dart';
+import 'package:sparkshell/chat/model_vault.dart';
 import 'package:sparkshell/memory/memory_store.dart';
 import 'package:sparkshell/plugins/gallery.dart';
 import 'package:sparkshell/plugins/plugin.dart';
@@ -68,6 +69,9 @@ class _SettingsPageState extends State<SettingsPage>
   final _model = TextEditingController();
   final _vision = TextEditingController();
   final _sys = TextEditingController();
+
+  /// 「添加模型」那一行的输入框（只在内存里，回车/点添加后清空）。
+  final _newModel = TextEditingController();
   double _temp = 0.3;
   String _reasoning = 'auto';
   bool _obscure = true;
@@ -116,6 +120,7 @@ class _SettingsPageState extends State<SettingsPage>
     _model.dispose();
     _vision.dispose();
     _sys.dispose();
+    _newModel.dispose();
     _factText.dispose();
     super.dispose();
   }
@@ -892,13 +897,216 @@ class _SettingsPageState extends State<SettingsPage>
   // 1. 模型
   // ══════════════════════════════════════════════════════════════════
 
+  /// 当前接入点。以「接口地址」草稿为准：用户改了地址，列表立刻切到那个接入点。
+  String _endpoint() {
+    final t = _base.text.trim();
+    return t.isEmpty ? (_cfg?.baseUrl.trim() ?? '') : t;
+  }
+
+  /// 当前接入点下已保存的模型：固定的在前，其次按最近使用，再其次按添加时间。
+  ///
+  /// `forEndpoint` 会把 `baseUrl == ''` 的「通用」档一并给到（缺省任何接入点都能选），
+  /// 所以这里再按 id 收一遍口：通用档和接入点档并存时只留排名靠前的那条，
+  /// 否则同一个模型会出现两行（删除是全副本穿透的，少一行不影响操作）。
+  List<ModelEntry> _savedModels() {
+    final cfg = _cfg;
+    if (cfg == null) return const <ModelEntry>[];
+    final list = cfg.vault.forEndpoint(_endpoint()).toList();
+    list.sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+      final byUsed = b.lastUsedAt.compareTo(a.lastUsedAt);
+      if (byUsed != 0) return byUsed;
+      final byAdded = b.addedAt.compareTo(a.addedAt);
+      if (byAdded != 0) return byAdded;
+      return a.id.compareTo(b.id);
+    });
+    final seen = <String>{};
+    return list.where((e) => seen.add(e.id)).toList();
+  }
+
+  void _onBaseChanged(String _) {
+    // 地址决定「当前接入点」看到哪些模型，必须重建，不能只标脏。
+    setState(() => _dirty = true);
+  }
+
+  /// 设为当前主模型：只改草稿 + 内存，列表一项不动，写盘仍走底部「保存」。
+  void _useModel(ModelEntry e) {
+    final cfg = _cfg;
+    if (cfg == null || e.id == _model.text.trim()) return;
+    setState(() {
+      _model.text = e.id;
+      cfg.model = e.id;
+      _dirty = true;
+    });
+    // 带上 baseUrl 精确命中这一条（同名可能还有别的接入点 / 通用档）。
+    cfg.vault.markUsed(e.id, baseUrl: e.baseUrl);
+    widget.onChanged?.call();
+  }
+
+  void _togglePin(ModelEntry e) {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    // pinModel / unpinModel 内部落到 vault 并立即写盘。
+    if (e.pinned) {
+      cfg.unpinModel(e.id);
+    } else {
+      cfg.pinModel(e.id);
+    }
+    setState(() {});
+  }
+
+  void _deleteModel(ModelEntry e) {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final wasCurrent = e.id == _model.text.trim();
+    cfg.removeModel(e.id);
+    setState(() {});
+    _snack(
+      wasCurrent ? '已删除「${e.id}」，当前模型仍是它，可另选一个' : '已删除「${e.id}」',
+    );
+  }
+
+  /// 添加模型：**只追加，绝不覆盖**。
+  ///
+  /// 列表里已经有这个名字（含 `baseUrl == ''` 的「通用」档）就只把它设为当前，
+  /// 不再追加一条同名副本；真没见过的才 `vault.add` 到当前接入点。
+  /// 已有项一条都不动——同名同接入点走 add 也只更新 thinking，固定状态不会降级。
+  Future<void> _addModel() async {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final id = _newModel.text.trim();
+    if (id.isEmpty) {
+      _snack('先填模型名');
+      return;
+    }
+    final endpoint = _endpoint();
+    final known = cfg.vault.forEndpoint(endpoint).any((e) => e.id == id);
+    final isNew = known ? false : cfg.vault.add(id, baseUrl: endpoint);
+    cfg.vault.markUsed(id);
+    setState(() {
+      _model.text = id; // 当前模型跟着切；列表保留，不清空
+      cfg.model = id;
+      _newModel.clear();
+    });
+    try {
+      await cfg.save(widget.cfgPath);
+      if (!mounted) return;
+      setState(() => _dirty = _pendingEdits(cfg));
+      widget.onChanged?.call();
+      _snack(isNew ? '已添加「$id」并设为当前' : '「$id」已在列表，已设为当前');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _dirty = true);
+      _snack('已加入列表，但写盘失败：$e');
+    }
+  }
+
+  /// 草稿里还有没有没落盘的改动（添加模型会顺手写盘，别把别处的脏标记误清了）。
+  bool _pendingEdits(ApiConfig cfg) =>
+      _base.text.trim() != cfg.baseUrl.trim() ||
+      _key.text.trim() != cfg.apiKey.trim() ||
+      _model.text.trim() != cfg.model.trim() ||
+      _vision.text.trim() != cfg.visionModel.trim() ||
+      _sys.text != cfg.systemPrompt ||
+      (_temp - cfg.temperature).abs() > 0.0001 ||
+      _reasoning != cfg.reasoning;
+
+  /// 看图模型：从同一份已保存列表里挑，允许留空（= 跟主模型一样）。走底部弹层，不新开页面。
+  Future<void> _pickVisionModel() async {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final models = _savedModels();
+    final cur = _vision.text.trim();
+    // 手填过、但不在列表里的值也要能看见并保留（用空串当「没有」的哨兵，模型名不可能是空）。
+    final orphan = cur.isNotEmpty && !models.any((e) => e.id == cur) ? cur : '';
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Sk.card,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '看图模型',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: Sk.text,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                const Text(
+                  '和主模型同一份列表；留空 = 跟主模型一样。纯文本模型收到图片会 400。',
+                  style: TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
+                ),
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+                  ),
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      _VisionPickRow(
+                        label: '留空 · 与主模型相同',
+                        selected: cur.isEmpty,
+                        onTap: () => Navigator.of(ctx).pop(''),
+                      ),
+                      for (final e in models)
+                        _VisionPickRow(
+                          label: e.id,
+                          sub: e.baseUrl.trim().isEmpty ? '通用' : e.baseUrl.trim(),
+                          selected: e.id == cur,
+                          onTap: () => Navigator.of(ctx).pop(e.id),
+                        ),
+                      if (orphan.isNotEmpty)
+                        _VisionPickRow(
+                          label: orphan,
+                          sub: '当前值（不在列表里）',
+                          selected: true,
+                          onTap: () => Navigator.of(ctx).pop(orphan),
+                        ),
+                      if (models.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 14),
+                          child: Text(
+                            '这个接入点还没有保存的模型，先在上面「添加模型」里加一个。',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Sk.dim,
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (picked == null || !mounted) return; // null = 用户点外面取消
+    setState(() {
+      _vision.text = picked;
+      _dirty = true;
+    });
+  }
+
   Widget _buildModelTab() {
     final cfg = _cfg!;
-    final recent = cfg.models
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty && e != _model.text.trim())
-        .take(6)
-        .toList();
+    final saved = _savedModels();
+    // 按名字去重：通用档和接入点档可能是同一个模型的两份档案。
+    final total = cfg.vault.entries.map((e) => e.id).toSet().length;
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
       children: [
@@ -911,7 +1119,12 @@ class _SettingsPageState extends State<SettingsPage>
                 label: '接口地址',
                 hint: 'https://api.qnaigc.com/v1',
                 keyboardType: TextInputType.url,
-                onChanged: (_) => _markDirty(),
+                onChanged: _onBaseChanged,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '换接入点不会丢掉别的接入点下已保存的模型；下面列的是当前这个接入点的模型。',
+                style: TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
               ),
               const SizedBox(height: 14),
               SkField(
@@ -941,49 +1154,172 @@ class _SettingsPageState extends State<SettingsPage>
             ],
           ),
         ),
-        const SkSection('模型'),
+        SkSection(
+          '模型',
+          trailing: Text(
+            saved.isEmpty ? '还没有保存的模型' : '${saved.length} 个',
+            style: const TextStyle(fontSize: 11, color: Sk.dim),
+          ),
+        ),
         SkCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SkField(
-                controller: _model,
-                label: '主模型',
-                hint: 'qiniu/conatus-free',
-                onChanged: (_) => _markDirty(),
-              ),
-              if (recent.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    for (final m in recent)
-                      _MiniChip(
-                        label: m,
-                        onTap: () {
-                          setState(() {
-                            _model.text = m;
-                            _markDirty();
-                          });
-                        },
+              // 当前主模型 = 列表里打勾的那一项；换它只改草稿，底部「保存」才写盘。
+              Row(
+                children: [
+                  const Text(
+                    '当前主模型',
+                    style: TextStyle(fontSize: 12, color: Sk.dim),
+                  ),
+                  const Spacer(),
+                  Flexible(
+                    child: Text(
+                      _model.text.trim().isEmpty ? '未设置' : _model.text.trim(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Sk.primary,
+                        fontFamily: 'monospace',
+                        fontWeight: FontWeight.w600,
                       ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 14),
-              SkField(
-                controller: _vision,
-                label: '看图模型',
-                hint: '留空 = 与主模型相同',
-                onChanged: (_) => _markDirty(),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              const Text(
-                '纯文本模型收到图片会 400；配一个能读图的模型，只有带图那轮才切过去。',
-                style: TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
+              const Divider(height: 18, color: Sk.line),
+              if (saved.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    '这个接入点下还没有保存的模型，在下面添加一个。',
+                    style: TextStyle(fontSize: 11.5, color: Sk.dim, height: 1.5),
+                  ),
+                )
+              else
+                for (var i = 0; i < saved.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, color: Sk.line),
+                  _ModelRow(
+                    entry: saved[i],
+                    current: saved[i].id == _model.text.trim(),
+                    thinking: cfg.supportsThinking(saved[i].id),
+                    onUse: () => _useModel(saved[i]),
+                    onPin: () => _togglePin(saved[i]),
+                    onDelete: () => _deleteModel(saved[i]),
+                  ),
+                ],
+              const Divider(height: 18, color: Sk.line),
+              // 添加：只追加。vault.add 按 id 去重，已有项一项都不会被顶掉。
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _newModel,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _addModel(),
+                      cursorColor: Sk.primary,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Sk.text,
+                        fontFamily: 'monospace',
+                      ),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: '新模型名，如 qwen-vl-max',
+                        hintStyle: TextStyle(
+                          fontSize: 12,
+                          color: Sk.dim.withValues(alpha: 0.55),
+                        ),
+                        filled: true,
+                        fillColor: Sk.bg.withValues(alpha: 0.55),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 11,
+                          vertical: 11,
+                        ),
+                        border: _inputBorder(Sk.line),
+                        enabledBorder: _inputBorder(Sk.line),
+                        focusedBorder: _inputBorder(Sk.primary, width: 1.4),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    height: 40,
+                    child: FilledButton(
+                      onPressed: _addModel,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Sk.primary,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      child: const Text('添加'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                total > saved.length
+                    ? '添加是追加，不会覆盖已有项，加完自动设为当前。另有 ${total - saved.length} 个模型在别的接入点下，换接口地址即可看到。'
+                    : '添加是追加，不会覆盖已有项，加完自动设为当前。固定的模型一直排在列表最前。',
+                style: const TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
               ),
             ],
+          ),
+        ),
+        const SkSection('看图模型'),
+        SkCard(
+          padding: EdgeInsets.zero,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(Sk.radius),
+            onTap: _pickVisionModel,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _vision.text.trim().isEmpty
+                              ? '与主模型相同（留空）'
+                              : _vision.text.trim(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontFamily: 'monospace',
+                            color: _vision.text.trim().isEmpty
+                                ? Sk.dim
+                                : Sk.text,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        const Text(
+                          '纯文本模型收到图片会 400；配一个能读图的模型，只有带图那轮才切过去。',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Sk.dim,
+                            height: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  const Icon(Icons.expand_more, size: 18, color: Sk.dim),
+                ],
+              ),
+            ),
           ),
         ),
         const SkSection('生成参数'),
@@ -1928,25 +2264,188 @@ class _MiniSwitch extends StatelessWidget {
   }
 }
 
-class _MiniChip extends StatelessWidget {
-  const _MiniChip({required this.label, required this.onTap});
+/// 模型列表的一行：模型名（+ 接入点 / 思考标记，单行省略）+ 固定 / 设为当前 / 删除。
+///
+/// 整行可点 = 设为当前；点当前行不响应，避免无意义的 setState。
+class _ModelRow extends StatelessWidget {
+  const _ModelRow({
+    required this.entry,
+    required this.current,
+    required this.thinking,
+    required this.onUse,
+    required this.onPin,
+    required this.onDelete,
+  });
+
+  final ModelEntry entry;
+  final bool current;
+  final bool thinking;
+  final VoidCallback onUse;
+  final VoidCallback onPin;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final ep = entry.baseUrl.trim().isEmpty ? '通用' : entry.baseUrl.trim();
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(9),
+        onTap: current ? null : onUse,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 3, 0, 3),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: entry.id,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontFamily: 'monospace',
+                          color: current ? Sk.text : Sk.dim,
+                          fontWeight: current
+                              ? FontWeight.w600
+                              : FontWeight.w400,
+                        ),
+                      ),
+                      TextSpan(
+                        text: '  ·  $ep',
+                        style: const TextStyle(fontSize: 10.5, color: Sk.dim),
+                      ),
+                      if (thinking)
+                        const TextSpan(
+                          text: '  ·  思考',
+                          style: TextStyle(fontSize: 10.5, color: Sk.dim),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              _RowIcon(
+                icon: entry.pinned
+                    ? Icons.push_pin_rounded
+                    : Icons.push_pin_outlined,
+                color: entry.pinned ? Sk.primary : Sk.dim,
+                tooltip: entry.pinned ? '取消固定' : '固定到最前',
+                onTap: onPin,
+              ),
+              _RowIcon(
+                icon: current
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked,
+                color: current ? Sk.primary : Sk.dim,
+                tooltip: current ? '当前模型' : '设为当前',
+                onTap: current ? null : onUse,
+              ),
+              _RowIcon(
+                icon: Icons.delete_outline_rounded,
+                color: Sk.danger,
+                tooltip: '从列表删除',
+                onTap: onDelete,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 列表行右侧的小图标动作（比默认 IconButton 窄，三个并排放得下）。
+class _RowIcon extends StatelessWidget {
+  const _RowIcon({
+    required this.icon,
+    required this.color,
+    required this.tooltip,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      onPressed: onTap,
+      tooltip: tooltip,
+      splashRadius: 18,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+      icon: Icon(icon, size: 17, color: color),
+    );
+  }
+}
+
+/// 看图模型弹层里的一行：单选圈 + 模型名（+ 来源接入点），单行省略。
+class _VisionPickRow extends StatelessWidget {
+  const _VisionPickRow({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.sub,
+  });
 
   final String label;
+  final String? sub;
+  final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(8),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: Sk.bg.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: Sk.line),
+    final s = sub?.trim() ?? '';
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(9),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked,
+                size: 15,
+                color: selected ? Sk.primary : Sk.dim,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: label,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontFamily: 'monospace',
+                          color: selected ? Sk.text : Sk.dim,
+                        ),
+                      ),
+                      if (s.isNotEmpty)
+                        TextSpan(
+                          text: '  ·  $s',
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            color: Sk.dim,
+                          ),
+                        ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
-        child: Text(label, style: const TextStyle(fontSize: 11, color: Sk.dim)),
       ),
     );
   }
@@ -2039,6 +2538,13 @@ class _PingBanner extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════════
 // 纯函数
 // ══════════════════════════════════════════════════════════════════════
+
+/// 输入框描边（跟 SkField 内部那套保持一致，添加行是裸 TextField 所以自己拼）。
+OutlineInputBorder _inputBorder(Color c, {double width = 1}) =>
+    OutlineInputBorder(
+      borderRadius: BorderRadius.circular(Sk.fieldRadius),
+      borderSide: BorderSide(color: c, width: width),
+    );
 
 /// 千分位，滑杆上方那个大数字要用。
 String _fmtInt(int v) {

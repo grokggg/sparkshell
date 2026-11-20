@@ -924,19 +924,30 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 模型 + 思考档的底部弹层。
   ///
-  /// 三件事在这里一次说完：这台接入点有哪些模型、当前是哪个、
-  /// 这个模型吃不吃思考参数（吃就列四档，不吃就灰掉但允许手动开）。
+  /// 三段式，替代原来「一个平铺列表 + 拉取就把几十个名字全灌进去」的做法：
+  ///   1. 已固定 —— 用户主动钉住的，永远在，不会被拉取结果冲掉；
+  ///   2. 最近用过 —— 真正用过的（lastUsedAt > 0），按时间倒序，最多 12 条；
+  ///      末尾再补几条手填过但还没用过的，免得设置页填的模型在这里没有位置；
+  ///   3. 接入点拉取 —— 只是候选展示，点右侧「固定」才入库，不入库就不占位置。
+  /// 当前选中的模型一定在列表最前面出现：它若已属于某一段就提到该段首位，
+  /// 三段都不属于时单开一条「当前使用」顶在最上面，绝不隐身。
   Future<void> _modelSheet() async {
     final cfg = _cfg;
     final dir = _filesDir;
     if (cfg == null) return;
-    final list = <String>[...cfg.models];
-    if (!list.contains(cfg.model)) list.insert(0, cfg.model);
-    if (list.isEmpty) list.add(cfg.model);
     var sel = cfg.model;
     var lvl = cfg.reasoning;
     var loading = false;
     var hint = '';
+
+    // 拉取结果只活在这次弹层里：不入库、不覆盖已固定项，也不改旧的 models 字段。
+    final pulled = <String>[];
+    var pulledCount = 0;
+
+    // 固定/取消固定是「改列表结构」，改完立刻落盘，关掉弹层也不丢。
+    Future<void> persist() async {
+      if (dir != null) await cfg.save(dir);
+    }
 
     await showModalBottomSheet<void>(
       context: context,
@@ -944,21 +955,224 @@ class _ChatPageState extends State<ChatPage> {
       backgroundColor: const Color(0xFF141A24),
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
         final sup = cfg.supportsThinking(sel);
+        final vault = cfg.vault;
+
+        // 档案库按 (名字, 接入点) 存，同名可能有多条；展示按名字去重。
+        // vault.entries 已按「固定优先、再按最近使用」排序，取第一条的接入点即可。
+        final urlOf = <String, String>{};
+        for (final e in vault.entries) {
+          urlOf.putIfAbsent(e.id, () => e.baseUrl);
+        }
+
+        // 1) 已固定：pinned 的项；当前项提到首位，一眼看到「正在用哪个」
+        final pinned = <String>[];
+        for (final e in vault.entries) {
+          if (e.pinned && !pinned.contains(e.id)) pinned.add(e.id);
+        }
+        if (pinned.remove(sel)) pinned.insert(0, sel);
+
+        // 2) 最近用过：未固定、确实用过（lastUsedAt > 0），按时间倒序，最多 12 条。
+        // 后面再补上「手填过但还没用过」的（设置页填的、旧配置迁移来的）：
+        // 它们既不在固定区，一般也不在拉取结果里，不给位置就等于换个地方丢模型。
+        final used = vault.entries
+            .where((e) => !e.pinned && e.lastUsedAt > 0)
+            .toList();
+        used.sort((a, b) => b.lastUsedAt.compareTo(a.lastUsedAt));
+        final recentAll = <String>[];
+        for (final e in used) {
+          if (pinned.contains(e.id) || recentAll.contains(e.id)) continue;
+          recentAll.add(e.id);
+        }
+        final unused = <String>[];
+        for (final e in vault.entries) {
+          if (e.pinned || e.lastUsedAt > 0) continue;
+          if (pinned.contains(e.id) ||
+              recentAll.contains(e.id) ||
+              unused.contains(e.id)) {
+            continue;
+          }
+          unused.add(e.id);
+        }
+        final recent = recentAll.take(12).toList();
+        final unusedShown = unused.take(20).toList();
+        recent.addAll(unusedShown);
+        if (recent.remove(sel)) recent.insert(0, sel);
+        final recentNote = <String>[
+          if (recentAll.length > 12) '最近 12 条（共 ${recentAll.length} 个）',
+          if (unusedShown.isNotEmpty)
+            (unused.length > unusedShown.length
+                ? '${unusedShown.length} 个还没用过（共 ${unused.length} 个）'
+                : '${unusedShown.length} 个还没用过'),
+        ].join(' · ');
+
+        // 3) 拉取候选：上面已经列过的名字不重复显示（同一项出现两遍只会点错）
+        final cand = <String>[
+          for (final m in pulled)
+            if (m != sel && !pinned.contains(m) && !recent.contains(m)) m,
+        ];
+        final candShown = cand.take(60).toList();
+
+        // 当前项三段都不属于时，单开一条顶在最前，保证它不隐身
+        final selListed = pinned.contains(sel) || recent.contains(sel);
+
+        Widget header(String title, {String? note}) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(4, 10, 4, 2),
+            child: Row(children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF8FA0BC))),
+              if (note != null && note.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(note,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 10.5, color: Color(0xFF5C6A82))),
+                ),
+              ],
+            ]),
+          );
+        }
+
+        Widget emptyLine(String text) => Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
+              child: Text(text,
+                  style:
+                      const TextStyle(fontSize: 11, color: Color(0xFF5C6A82))),
+            );
+
+        // 一行模型：左边永远是对勾位（选中的才有颜色），右边是操作位。
+        Widget tile(String id, {Widget? action}) {
+          final on = id == sel;
+          return ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+            horizontalTitleGap: 6,
+            minLeadingWidth: 16,
+            leading: Icon(
+              on ? Icons.check_circle : Icons.circle_outlined,
+              size: 15,
+              color: on ? const Color(0xFF6FA8FF) : const Color(0xFF39445A),
+            ),
+            title: Text(id,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 13,
+                    color:
+                        on ? const Color(0xFFE6EDFA) : const Color(0xFFB9C6DC))),
+            subtitle: cfg.supportsThinking(id)
+                ? const Text('支持思考',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF6FA8FF)))
+                : null,
+            trailing: action,
+            onTap: () => setSheet(() => sel = id),
+          );
+        }
+
+        // 固定一项：先在它自己的接入点下建档（已存在则只更新），再钉住。
+        // 两步都用同一个 baseUrl，否则 vault 会按「同名不同接入点」多存一条。
+        Future<void> pinUp(String id) async {
+          final url = urlOf[id] ?? cfg.baseUrl;
+          vault.add(id, baseUrl: url);
+          vault.pin(id, baseUrl: url);
+          if (ctx.mounted) setSheet(() {});
+          await persist();
+        }
+
+        Future<void> unpinUp(String id) async {
+          vault.unpin(id, baseUrl: urlOf[id] ?? cfg.baseUrl);
+          if (ctx.mounted) setSheet(() {});
+          await persist();
+        }
+
+        Widget pinIcon(String id) => IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: '固定到「已固定」',
+              icon: const Icon(Icons.push_pin_outlined,
+                  size: 16, color: Color(0xFF8FA0BC)),
+              onPressed: () => pinUp(id),
+            );
+
+        Widget unpinIcon(String id) => IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: '取消固定',
+              icon:
+                  const Icon(Icons.push_pin, size: 16, color: Color(0xFF6FA8FF)),
+              onPressed: () => unpinUp(id),
+            );
+
+        Widget pinText(String id) => TextButton(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 28),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () => pinUp(id),
+              child: const Text('固定', style: TextStyle(fontSize: 12)),
+            );
+
         Future<void> pull() async {
           setSheet(() => loading = true);
           final got = await LlmClient(cfg).listModels();
+          if (!ctx.mounted) return;
           setSheet(() {
             loading = false;
-            if (got.isEmpty) {
-              hint = '接入点没给出模型列表（可能不支持 /models），可以去设置里手填';
-              return;
-            }
-            hint = '拉到 ${got.length} 个模型';
+            pulled.clear();
             for (final m in got) {
-              cfg.rememberModel(m);
-              if (!list.contains(m)) list.insert(0, m);
+              final v = m.trim();
+              if (v.isNotEmpty && !pulled.contains(v)) pulled.add(v);
             }
+            pulledCount = pulled.length;
+            hint = pulledCount == 0
+                ? '接入点没给出模型列表（可能不支持 /models），可以去设置里手填'
+                : '拉到 $pulledCount 个模型，点右侧「固定」才会存进列表';
           });
+        }
+
+        final rows = <Widget>[];
+        if (!selListed) {
+          rows.add(header('当前使用', note: '还没固定，也不在最近用过里'));
+          rows.add(tile(sel));
+        }
+
+        rows.add(header('已固定',
+            note: pinned.isEmpty ? null : '${pinned.length} 个，不会被拉取冲掉'));
+        if (pinned.isEmpty) {
+          rows.add(emptyLine('还没固定任何模型。用过的会自动进「最近用过」，也可以在下面拉取后点图钉固定。'));
+        } else {
+          for (final id in pinned) {
+            rows.add(tile(id, action: unpinIcon(id)));
+          }
+        }
+
+        rows.add(header('最近用过',
+            note: recentNote.isEmpty ? null : recentNote));
+        if (recent.isEmpty) {
+          rows.add(emptyLine('用过的模型会出现在这里；设置页手填的也会留在这一区。'));
+        } else {
+          for (final id in recent) {
+            rows.add(tile(id, action: pinIcon(id)));
+          }
+        }
+
+        rows.add(header('接入点拉取',
+            note: (pulledCount == 0 || cand.length <= 60)
+                ? null
+                : '只列出前 60 个'));
+        if (pulledCount == 0) {
+          rows.add(emptyLine('点右上角「从接入点拉取」看看这台接入点有哪些模型。结果只在这里做候选，不动上面的列表。'));
+        } else if (candShown.isEmpty) {
+          rows.add(emptyLine('拉到的模型都已经在上面了。'));
+        } else {
+          for (final id in candShown) {
+            rows.add(tile(id, action: pinText(id)));
+          }
         }
 
         return SafeArea(
@@ -993,22 +1207,7 @@ class _ChatPageState extends State<ChatPage> {
               Flexible(
                 child: ListView(
                   shrinkWrap: true,
-                  children: [
-                    for (final m in list)
-                      ListTile(
-                        dense: true,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                        title: Text(m, style: const TextStyle(fontSize: 13)),
-                        subtitle: cfg.supportsThinking(m)
-                            ? const Text('支持思考',
-                                style: TextStyle(fontSize: 11, color: Color(0xFF6FA8FF)))
-                            : null,
-                        trailing: m == sel
-                            ? const Icon(Icons.check, size: 17, color: Color(0xFF6FA8FF))
-                            : null,
-                        onTap: () => setSheet(() => sel = m),
-                      ),
-                  ],
+                  children: rows,
                 ),
               ),
               const Divider(height: 18),
@@ -1036,14 +1235,19 @@ class _ChatPageState extends State<ChatPage> {
                 contentPadding: EdgeInsets.zero,
                 value: sup,
                 title: const Text('这个模型支持思考', style: TextStyle(fontSize: 12)),
-                onChanged: (v) => setSheet(() => cfg.thinkingSupport[sel] = v),
+                onChanged: (v) => setSheet(() {
+                  // 旧字段留着（设置页仍读它），但 supportsThinking 先看档案库，
+                  // 只写 thinkingSupport 会被已有标注盖回去，所以两处一起写。
+                  cfg.thinkingSupport[sel] = v;
+                  cfg.vault.annotate(sel, v);
+                }),
               ),
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
                   onPressed: () async {
                     cfg.model = sel;
-                    cfg.rememberModel(sel);
+                    cfg.vault.markUsed(sel);
                     cfg.reasoning = lvl;
                     if (dir != null) await cfg.save(dir);
                     if (mounted) setState(() {});

@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'model_vault.dart';
 
 /// 模型接入配置：OpenAI 兼容（DeepSeek / 通义 / Kimi / 本地 Ollama / vLLM 都能用）。
 ///
@@ -55,30 +58,96 @@ class ApiConfig {
     }
   }
 
-  /// 这一台接入点上见过的模型（`GET /v1/models` 拉回来的 + 手填的）。
-  /// 只做“输入框上方那排能选什么”的候选，不参与请求体；换接入点后可以重拉。
+  /// 模型档案库：固定项永不淘汰，按接入点分组记忆。
+  /// 这是唯一的真源；下面的 [models]、[thinkingSupport] 只作旧版兼容镜像。
+  final ModelVault vault = ModelVault();
+
+  /// **旧版兼容字段**：曾经是「最近用过 / 拉到过」的滚动列表。
+  /// 现在由 [vault] 派生（最近用过的名字，最多 80 条），只为老版本读得懂。
   final List<String> models = [];
 
   /// 用户手动标注过「这个模型到底吃不吃思考参数」。
   /// 名字猜不准的（比如 `qiniu/conatus-free`）由这里兜底，true=显示思考档位。
+  /// 落盘时同步进 vault，读的时候 vault 优先。
   final Map<String, bool> thinkingSupport = {};
 
-  /// 名字里带这些的，基本都吃 `reasoning_effort` / `thinking`：
-  /// reasoner / thinking / r1 / qwq / qwen3 / glm-4.5 / z1 / kimi-k2 / o1-o4 / gpt-5。
-  static bool looksThinking(String id) => RegExp(
-        r'(reasoner|thinking|deepseek-r1|qwq|qwen3|glm-4\.5|glm-z1|kimi-k2|(^|[/-])o[1-4]([/-]|$)|gpt-5)',
-        caseSensitive: false,
-      ).hasMatch(id);
+  /// 名字里带这些的，基本都吃 `reasoning_effort` / `thinking`。
+  /// 规则本体搬去 [ModelVault.looksThinking]（vault 不能依赖配置类），这里只转发。
+  static bool looksThinking(String id) => ModelVault.looksThinking(id);
 
-  bool supportsThinking(String id) => thinkingSupport[id] ?? looksThinking(id);
+  bool supportsThinking(String id) =>
+      vault.thinkingOf(id) ?? thinkingSupport[id.trim()] ?? looksThinking(id);
 
-  /// 记住一个模型名（放最前面，去重），只改内存，落盘由调用方决定。
+  /// 记住一个模型名（只改内存，落盘由调用方决定）。
+  ///
+  /// 语义从「滚动列表」换成「留档」：不固定、归属当前接入点、
+  /// 超出上限只淘汰未固定且最久未用的，用户固定过的一条都不动。
   void rememberModel(String id) {
     final m = id.trim();
     if (m.isEmpty) return;
-    models.remove(m);
-    models.insert(0, m);
-    if (models.length > 80) models.removeRange(80, models.length);
+    vault.add(m, baseUrl: baseUrl);
+    _syncLegacyModels();
+  }
+
+  /// 选择器该显示什么：本接入点 + 通用项，当前模型保证在列。
+  List<String> get selectableModels =>
+      vault.chooseList(baseUrl: baseUrl, current: model);
+
+  /// 固定 / 取消固定 / 删除都在「模型名」这一层生效，穿透到该名字的所有归档副本。
+  ///
+  /// 为什么不是只改当前接入点那份：升级迁移来的通用档（''）和后来从接入点拉到的
+  /// 同名档，在用户眼里就是同一个模型；只改一份的话，UI 读到的往往正是另一份，
+  /// 表现为「点了固定没反应」。
+  void pinModel(String id) {
+    if (!_eachCopy(id, (e) => e.pinned = true)) {
+      vault.pin(id, baseUrl: baseUrl); // 一条都没有：按当前接入点建档
+    }
+    _afterVaultChange();
+  }
+
+  void unpinModel(String id) {
+    _eachCopy(id, (e) => e.pinned = false);
+    _afterVaultChange();
+  }
+
+  void removeModel(String id) {
+    final name = id.trim();
+    for (final e in vault.entries) {
+      if (e.id == name) vault.remove(e.id, baseUrl: e.baseUrl);
+    }
+    _afterVaultChange();
+  }
+
+  /// 对同名条目逐个执行，返回是否至少命中一条。
+  bool _eachCopy(String id, void Function(ModelEntry e) f) {
+    final name = id.trim();
+    var hit = false;
+    for (final e in vault.entries) {
+      if (e.id == name) {
+        f(e);
+        hit = true;
+      }
+    }
+    return hit;
+  }
+
+  void _afterVaultChange() {
+    _syncLegacyModels();
+    final dir = filesDir;
+    if (dir.isEmpty) return; // 还没 load 过，等下次 save
+    unawaited(save(dir).catchError((Object _) {}));
+  }
+
+  /// 把 vault 里最近用过的名字回写到旧 `models` 字段（含当前模型，最多 80）。
+  void _syncLegacyModels() {
+    final names = vault.recentNames(limit: 79);
+    final cur = model.trim();
+    models
+      ..clear()
+      ..addAll([
+        if (cur.isNotEmpty) cur,
+        ...names.where((e) => e != cur),
+      ]);
   }
 
   /// 备用接入点：轮换用，元素是 {baseUrl, apiKey, model}。
@@ -128,20 +197,41 @@ class ApiConfig {
         reasoning: m['reasoning'] as String? ?? 'auto',
       );
       cfg.filesDir = filesDir;
-      final ms = m['models'];
-      if (ms is List) {
-        for (final e in ms) {
-          final v = '$e'.trim();
-          if (v.isNotEmpty && !cfg.models.contains(v)) cfg.models.add(v);
+      final vs = m['vault'];
+      if (vs is Map) {
+        final v = ModelVault.fromJson(vs);
+        cfg.vault.restore(v.entries, maxUnpinned: v.maxUnpinned);
+        // vault 与旧 models 可能不同步（比如手工改过文件），缺的补进来
+        final ms = m['models'];
+        if (ms is List) {
+          for (final e in ms) {
+            final v = '$e'.trim();
+            if (v.isEmpty) continue;
+            if (cfg.vault.entries.every((x) => x.id != v)) cfg.vault.add(v);
+          }
         }
+      } else {
+        // 老配置升级：旧的 models 全是「拉到手」的，先按不固定灌进档案库；
+        // 当前模型单独固定 —— 否则升级后第一次拉取就可能把用户手填的冲没。
+        final ms = m['models'];
+        if (ms is List) {
+          for (final e in ms) {
+            final v = '$e'.trim();
+            if (v.isNotEmpty) cfg.vault.add(v);
+          }
+        }
+        cfg.vault.pin(cfg.model);
       }
       final ts = m['thinking'];
       if (ts is Map) {
         ts.forEach((k, v) {
-          if (v is bool) cfg.thinkingSupport['$k'] = v;
+          if (v is bool) {
+            cfg.thinkingSupport['$k'] = v;
+            cfg.vault.annotate('$k', v); // 标注落到档案库，别只留在旧字段里
+          }
         });
       }
-      if (cfg.models.isEmpty) cfg.models.add(cfg.model);
+      cfg._syncLegacyModels();
       final bs = m['backups'];
       if (bs is List) {
         for (final e in bs) {
@@ -162,6 +252,10 @@ class ApiConfig {
 
   Future<void> save(String filesDir) async {
     final f = _file(filesDir);
+    // 旧字段 thinking 里可能刚被 UI 直接改过（chat_page 就是直接写 map），
+    // 落盘前并进 vault，保证档案库不落后。
+    thinkingSupport.forEach(vault.annotate);
+    _syncLegacyModels();
     await f.writeAsString(jsonEncode({
       'baseUrl': baseUrl,
       'apiKey': apiKey,
@@ -170,6 +264,8 @@ class ApiConfig {
       'systemPrompt': systemPrompt,
       'temperature': temperature,
       'reasoning': reasoning,
+      'vault': vault.toJson(),
+      // 旧版本只认这个数组：保持「最近用过的名字」，别让回滚丢档
       'models': models,
       'thinking': thinkingSupport,
       'backups': backups,
