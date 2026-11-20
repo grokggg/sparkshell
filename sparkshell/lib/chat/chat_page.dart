@@ -19,6 +19,11 @@ import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
 import 'api_config.dart';
+import 'context_builder.dart';
+import '../memory/memory_store.dart';
+import '../plugins/plugin_store.dart';
+import '../plugins/gallery.dart';
+import '../settings/settings_page.dart';
 import 'vision.dart';
 import 'attach.dart';
 import 'llm_client.dart';
@@ -69,6 +74,15 @@ class _ChatPageState extends State<ChatPage> {
   LlmClient? _client;
   StreamSubscription<String>? _sub;
   String? _filesDir;
+
+  /// 跨会话记忆：落盘 files/memory.json，每轮把 digest 拼进 system。
+  MemoryStore? _mem;
+
+  /// 已装插件：工具名 plugin_<id>，执行时走容器 bash。
+  PluginStore? _plug;
+
+  /// 上下文压缩器。模型窗口改不了，能改的是「每次发多少」。
+  final ContextBuilder _ctxb = ContextBuilder();
   bool _busy = false;
   bool _agent = true;
   bool _autoApprove = false;
@@ -157,6 +171,18 @@ class _ChatPageState extends State<ChatPage> {
     _filesDir = await _ch.invokeMethod<String>('filesDir');
     if (_filesDir == null) return;
     final cfg = await ApiConfig.load(_filesDir!);
+    final mem = MemoryStore(_filesDir!);
+    await mem.load();
+    final plug = PluginStore(_filesDir!);
+    await plug.load();
+    if (plug.all.isEmpty) {
+      // 第一次启动装 3 个最常用的：不留白板，也不硬塞一屏看不懂的。
+      for (final p in builtinGallery().take(3)) {
+        await plug.install(p);
+      }
+      await plug.save();
+    }
+    Tools.plugins = plug;
     final store = SessionStore('$_filesDir/sessions');
     _store = store;
     var all = await store.list();
@@ -165,12 +191,45 @@ class _ChatPageState extends State<ChatPage> {
     if (!mounted) return;
     setState(() {
       _cfg = cfg;
+      _mem = mem;
+      _plug = plug;
       _sessions = all;
       _session = all.first;
       _msgs
         ..clear()
         ..addAll(all.first.messages.map((m) => _Msg('${m['role']}', '${m['content'] ?? ''}')));
     });
+  }
+
+  /// 把「全部气泡 + 长期记忆」压成这一轮真正要发的东西。
+  ///
+  /// 模型自己的窗口改不了；能做的是发送前裁剪 + 注入记忆，
+  /// 这样同一个窗口能装下更长的对话，也不会一开新会话就失忆。
+  BuiltContext _buildContext({bool skipToolBubbles = false}) {
+    final raw = _msgs
+        .where((m) => m.text.isNotEmpty && (!skipToolBubbles || m.role != 'tool'))
+        .map((m) => <String, dynamic>{'role': m.role, 'content': m.text})
+        .toList();
+    return _ctxb.build(
+      history: raw,
+      memory: _mem?.digest() ?? '',
+      systemPrompt: _cfg?.systemPrompt ?? '',
+    );
+  }
+
+  /// 用户说「记住……」时落一条长期记忆；普通聊天不打扰。
+  Future<void> _maybeRemember(String text) async {
+    final t = text.trim();
+    if (!t.startsWith('记住') && !t.startsWith('记一下')) return;
+    final body = t.replaceFirst(RegExp(r'^记住[，,：:]?|^记一下[，,：:]?'), '').trim();
+    if (body.isEmpty) return;
+    final mem = _mem;
+    if (mem == null) return;
+    await mem.add(body);
+    await mem.save();
+    if (mounted) {
+      setState(() => _status = '已记住：${body.length > 20 ? '${body.substring(0, 20)}…' : body}');
+    }
   }
 
   /// 把当前气泡写回会话并落盘（每条消息后调一次，崩溃最多丢一条）。
@@ -471,10 +530,9 @@ class _ChatPageState extends State<ChatPage> {
     });
     _toBottom();
 
-    final history = _msgs
-        .where((m) => m.text.isNotEmpty)
-        .map((m) => <String, dynamic>{'role': m.role, 'content': m.text})
-        .toList();
+    final bctx = _buildContext();
+    final history = bctx.messages;
+    await _maybeRemember(text);
     await _applyVision(history, text, images);
 
     final client = _client = LlmClient(
@@ -493,7 +551,7 @@ class _ChatPageState extends State<ChatPage> {
     unawaited(token.whenCancelled.then((_) {
       if (!done.isCompleted) done.complete();
     }));
-    _sub = client.chat(history, cancel: token).listen(
+    _sub = client.chat(history, cancel: token, extraSystem: bctx.systemSuffix).listen(
       (delta) {
         // 已点停止：晚到的增量不再往气泡里写
         if (token.isCancelled) return;
@@ -580,13 +638,14 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
 
-    final history = _msgs
-        .where((m) => m.role != 'tool' && m.text.trim().isNotEmpty)
-        .map((m) => <String, dynamic>{'role': m.role, 'content': m.text})
-        .toList();
+    final bctx = _buildContext(skipToolBubbles: true);
+    final history = bctx.messages;
+    await _maybeRemember(text);
     await _applyVision(history, text, images);
 
     final runner = AgentRunner(
+      extraSystem: bctx.systemSuffix,
+      toolsOverride: Tools.specsWithPlugins(),
       cfg: cfg,
       cancel: token,
       vision: images.isNotEmpty,
@@ -1086,7 +1145,7 @@ class _ChatPageState extends State<ChatPage> {
       final client = LlmClient(cfg);
       final msg = await client.complete(<Map<String, dynamic>>[
         {'role': 'user', 'content': '请用工具列出 /root 的文件'},
-      ], tools: Tools.specs);
+      ], tools: Tools.specsWithPlugins());
       client.dispose();
       sw.stop();
       final ok = (msg['content'] as String?)?.trim().isNotEmpty ?? false;
@@ -1340,7 +1399,30 @@ tags: debian, alpine, toolchain
 
   Future<void> _settings() async {
     final cfg = _cfg;
-    if (cfg == null) return;
+    final dir = _filesDir;
+    if (cfg == null || dir == null) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SettingsPage(
+        cfgPath: dir,
+        initialTab: 0,
+        onChanged: () async {
+          final c = await ApiConfig.load(dir);
+          if (mounted) setState(() => _cfg = c);
+        },
+      ),
+    ));
+    // 设置里可能改了模型/插件/记忆，回来同步一次
+    final c2 = await ApiConfig.load(dir);
+    final m2 = _mem;
+    if (m2 != null) await m2.load();
+    final p2 = _plug;
+    if (p2 != null) await p2.load();
+    if (mounted) setState(() => _cfg = c2);
+    if (!mounted) return;
+  }
+
+  /// 旧设置页：备用接入点、测思考开关这些还没搬进新页面，先从「高级」胶囊进去。
+  Future<void> _settingsLegacy(ApiConfig cfg) async {
     final base = TextEditingController(text: cfg.baseUrl);
     final key = TextEditingController(text: cfg.apiKey);
     final model = TextEditingController(text: cfg.model);
@@ -1856,6 +1938,11 @@ tags: debian, alpine, toolchain
               }),
               const SizedBox(width: 6),
               _pill(Icons.timeline, '时间线', () => _scaffold.currentState?.openDrawer()),
+              const SizedBox(width: 6),
+              _pill(Icons.tune, '高级', () {
+                final c = _cfg;
+                if (c != null) _settingsLegacy(c);
+              }),
             ],
           ),
         ),

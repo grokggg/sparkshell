@@ -117,12 +117,20 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.7.1-apk
-          name: SparkShell 3.7.1 (应用内更新改 6 路并行下载)
+          tag_name: v3.8.0-apk
+          name: SparkShell 3.8.0 (长期记忆 + 上下文压缩 + 插件 + 设置中心)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.8.0 — 记得住、塞得下、能装插件**
+            - 新：跨会话长期记忆 `memory.json`，每轮把 digest 拼进 system；说「记住…」就落一条
+            - 新：上下文压缩器 —— 发送前按预算裁剪，旧消息压成摘要，工具结果不留
+            - 新：插件系统 —— 内置 8 个（http_get/notes/todo/sysinfo/weather/web_search/短链/收件箱），
+              装了就变成 `plugin_<id>` 工具，模型能直接调；可启停、可删
+            - 新：设置中心五页（模型 / 插件 / 记忆 / 上下文 / 高级），旧的收进「高级」胶囊
+            - 改：Agent 每轮工具表 = 内置 14 个 + 已启用插件
+
             **3.7.1 — 更新下载不再一条腿走路**
             - 改：应用内更新对 >4 MB 的包走 6 路 Range 并行（服务端认 Range 才用，不认自动回退单连接）
             - 效果：同一条隧道，60 MB 从 ~60 秒压到十几秒

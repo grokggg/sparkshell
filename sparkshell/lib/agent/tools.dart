@@ -5,12 +5,46 @@ import '../term/terminal_bus.dart';
 import '../skills/skill_tools.dart';
 import '../ssh/ssh_exec.dart';
 import 'task_store.dart';
+import '../plugins/plugin.dart';
+import '../plugins/plugin_store.dart';
 
 /// Agent 可用的四个动作。全部作用在 proot 容器里，宿主目录不暴露。
 ///
 /// 文件读写直接走宿主路径（rootfs 前缀），比再套一层 proot 快一个数量级；
 /// 只有 bash 必须进容器，否则 glibc 动态链接器对不上。
 class Tools {
+  /// 已装插件（由 chat_page 在启动时注入）。插件工具名统一 `plugin_<id>`，
+  /// 执行时把 JSON 参数塞进插件命令的 {{args}} 占位，走同一条容器通道。
+  static PluginStore? plugins;
+
+  /// 内置工具 + 已启用的插件工具。插件停用即从列表消失，模型也就不会去调。
+  static List<Map<String, dynamic>> specsWithPlugins() {
+    final ps = plugins;
+    if (ps == null) return specs;
+    return [
+      ...specs,
+      for (final p in ps.enabled) ps.toolSpec(p),
+    ];
+  }
+
+  static Future<String> _runPlugin(String name, Map<String, dynamic> args) async {
+    final ps = plugins;
+    if (ps == null) return '插件系统没初始化';
+    final id = name.substring('plugin_'.length);
+    Plugin? p;
+    for (final e in ps.all) {
+      if (e.id == id) {
+        p = e;
+        break;
+      }
+    }
+    if (p == null) return '没有这个插件: $id';
+    if (!p.enabled) return '插件已停用: $id';
+    final raw = (args['args'] is Map) ? (args['args'] as Map).cast<String, dynamic>() : args;
+    final cmd = ps.buildCommand(p, raw);
+    return _bash({'command': cmd, 'timeout': 120});
+  }
+
   static const specs = <Map<String, dynamic>>[
     {
       'type': 'function',
@@ -267,6 +301,7 @@ class Tools {
         case 'skill_read':
           return await SkillTools.run(name, args);
         default:
+          if (name.startsWith('plugin_')) return _runPlugin(name, args);
           return '未知工具: $name';
       }
     } catch (e) {

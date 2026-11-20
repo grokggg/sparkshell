@@ -42,6 +42,8 @@ class AgentRunner {
     this.vision = false,
     this.onVisionFallback,
     this.modelOverride,
+    this.extraSystem,
+    this.toolsOverride,
   });
 
   final ApiConfig cfg;
@@ -58,6 +60,12 @@ class AgentRunner {
 
   /// 用户「停止」开关。可空：老调用点不传就是原来那种跑完为止的行为。
   final CancelToken? cancel;
+
+  /// 这一轮临时追加到 system 的记忆/摘要（跨会话记忆 + 旧消息压缩）。
+  final String? extraSystem;
+
+  /// 自定义工具表（内置 + 插件）。不给就用 Tools.specs。
+  final List<Map<String, dynamic>>? toolsOverride;
 
   /// 这一轮要不要把图片按多模态格式发出去。
   ///
@@ -233,7 +241,12 @@ class AgentRunner {
 
         // 停止时 HttpClient 被 close(force: true)，挂着的请求会以
         // SocketException / HttpException 冒出来；这类异常由下面的 catch 统一收口
-        final msg = await client.complete(messages, tools: Tools.specs, cancel: cancel);
+        final msg = await client.complete(
+          messages,
+          tools: toolsOverride ?? Tools.specs,
+          cancel: cancel,
+          extraSystem: extraSystem,
+        );
         // 退避文案（「限流…等 45 秒」）不能留到这一步：请求已经回来了，还挂着就是假消息
         onStatus?.call('第 $step 步 · 收到回复…');
         final raw = (msg['content'] as String?) ?? '';

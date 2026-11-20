@@ -233,6 +233,21 @@ class LlmClient {
     }
   }
 
+  /// system 段：配置里的 prompt + 这一轮临时追加的记忆/摘要。
+  ///
+  /// 合进**一条** system 消息而不是发两条：部分接入点只认第一条 system，
+  /// 发两条会静默丢掉第二条（记忆就白注入了）。
+  List<Map<String, dynamic>> _systemMessages(String? extraSystem) {
+    final parts = <String>[
+      cfg.systemPrompt.trim(),
+      (extraSystem ?? '').trim(),
+    ].where((s) => s.isNotEmpty).toList();
+    if (parts.isEmpty) return const [];
+    return [
+      {'role': 'system', 'content': parts.join('\n')},
+    ];
+  }
+
   /// 等重试退避，但 `whenCancelled` 一完成就立刻醒来（用户点停止不用等完这一轮）。
   Future<void> _sleep(int ms, CancelToken? cancel) {
     final wait = Future<void>.delayed(Duration(milliseconds: ms));
@@ -263,10 +278,10 @@ class LlmClient {
   Stream<String> chat(
     List<Map<String, dynamic>> messages, {
     CancelToken? cancel,
+    String? extraSystem,
   }) async* {
-    final sys = cfg.systemPrompt.trim();
-    var convo = <Map<String, dynamic>>[
-      if (sys.isNotEmpty) {'role': 'system', 'content': sys},
+    final convo = <Map<String, dynamic>>[
+      ..._systemMessages(extraSystem),
       ...messages,
     ];
 
@@ -350,8 +365,22 @@ class LlmClient {
     List<Map<String, dynamic>> messages, {
     List<Map<String, dynamic>>? tools,
     CancelToken? cancel,
+    String? extraSystem,
   }) async {
-    var convo = messages;
+    // complete() 的调用方（agent_runner）自己会插 system，这里只在必要时合并，
+    // 不能无脑再加一条：同一段 prompt 出现两遍，模型会当成两条互相矛盾的指令。
+    var convo = <Map<String, dynamic>>[...messages];
+    final extra = (extraSystem ?? '').trim();
+    if (extra.isNotEmpty) {
+      if (convo.isNotEmpty && convo.first['role'] == 'system') {
+        convo[0] = {
+          'role': 'system',
+          'content': '${convo.first['content'] ?? ''}\n$extra',
+        };
+      } else {
+        convo.insert(0, {'role': 'system', 'content': extra});
+      }
+    }
     var visionDegraded = false;
 
     while (true) {
