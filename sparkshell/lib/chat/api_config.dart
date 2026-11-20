@@ -86,6 +86,7 @@ class ApiConfig {
     final m = id.trim();
     if (m.isEmpty) return;
     vault.add(m, baseUrl: baseUrl);
+    vault.markUsed(m, baseUrl: baseUrl); // 刚用过的排最前，别按建档时间排
     _syncLegacyModels();
   }
 
@@ -138,16 +139,21 @@ class ApiConfig {
     unawaited(save(dir).catchError((Object _) {}));
   }
 
-  /// 把 vault 里最近用过的名字回写到旧 `models` 字段（含当前模型，最多 80）。
+  /// 把 vault 里最近用过的名字回写到旧 `models` 字段（最多 80）。
+  ///
+  /// 只做并集、不做重建：老代码和老配置会直接往 models 里 add，
+  /// 先把这些名字收进档案库再按「固定 + 最近使用」排序，一个都不丢。
+  /// 不往这里塞当前模型 —— 旧版本另有 model 字段，塞进来只会污染历史列表
+  /// （曾经把 reasoning_retry_test 的 ['a','b'] 顶成 ['qiniu/conatus-free','a']）。
   void _syncLegacyModels() {
-    final names = vault.recentNames(limit: 79);
-    final cur = model.trim();
+    for (final n in List<String>.from(models)) {
+      final v = n.trim();
+      if (v.isEmpty) continue;
+      if (vault.entries.every((e) => e.id != v)) vault.add(v);
+    }
     models
       ..clear()
-      ..addAll([
-        if (cur.isNotEmpty) cur,
-        ...names.where((e) => e != cur),
-      ]);
+      ..addAll(vault.recentNames(limit: 80));
   }
 
   /// 备用接入点：轮换用，元素是 {baseUrl, apiKey, model}。
