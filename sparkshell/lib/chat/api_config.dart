@@ -13,6 +13,7 @@ class ApiConfig {
     this.visionModel = '',
     this.systemPrompt = '你是 SparkShell 里的工程助手。回答简洁，给可执行命令。',
     this.temperature = 0.3,
+    this.reasoning = 'auto',
   });
 
   String baseUrl;
@@ -28,6 +29,31 @@ class ApiConfig {
 
   String systemPrompt;
   double temperature;
+
+  /// 思考深度：auto | off | low | high | max。
+  ///
+  /// DeepSeek 这类模型把这个当硬开关（不思考 = 直接出结果，快但浅），
+  /// 对 agent 场景差别很大：查环境时「不思考」少绕弯路，复杂改造要「高」。
+  /// auto 不带任何参数，行为与 3.4.0 完全一致。
+  String reasoning = 'auto';
+
+  /// 拼进请求体的思考参数；auto 返回空。
+  ///
+  /// 同时给 `thinking` 与 `reasoning_effort` 两套写法：前者是 DeepSeek/通义
+  /// 的原生字段，后者是 OpenAI 兼容层的通用字段。多余的字段多数网关会忽略，
+  /// 遇到严格校验的接入点会在「测试连接」里暴露出来。
+  Map<String, dynamic> reasoningPayload() {
+    switch (reasoning) {
+      case 'off':
+        return {'thinking': {'type': 'disabled'}, 'reasoning_effort': 'none'};
+      case 'low':
+      case 'high':
+      case 'max':
+        return {'reasoning_effort': reasoning};
+      default:
+        return const {};
+    }
+  }
 
   /// 备用接入点：轮换用，元素是 {baseUrl, apiKey, model}。
   /// 主接入点 5xx / 连不上时，自动切到下一个，并把能用的那个转正。
@@ -73,6 +99,7 @@ class ApiConfig {
         visionModel: m['visionModel'] as String? ?? '',
         systemPrompt: m['systemPrompt'] as String? ?? '',
         temperature: (m['temperature'] as num?)?.toDouble() ?? 0.3,
+        reasoning: m['reasoning'] as String? ?? 'auto',
       );
       cfg.filesDir = filesDir;
       final bs = m['backups'];
@@ -102,6 +129,7 @@ class ApiConfig {
       'visionModel': visionModel,
       'systemPrompt': systemPrompt,
       'temperature': temperature,
+      'reasoning': reasoning,
       'backups': backups,
     }), flush: true);
     this.filesDir = filesDir;

@@ -186,9 +186,11 @@ class LlmClient {
         rethrow;
       }
 
-      // 限流别死磕：免费额度窗口可能要几分钟，5 次全等下来 2 分多钟，
-      // 用户以为卡死了。3 次（8s+20s）不行就交回界面，让他点重试。
-      if (reason == 'rate_limit' && attempt >= 3) break;
+      // 限流不再交回界面：免费额度窗口常常几十秒到两分钟就恢复，
+      // 让用户点「继续」纯属折磨。限流一路退避重试到 maxAttempts（12 次、
+      // 合计约 10 分钟），中途恢复就自动接着跑，工具调用也照常继续。
+      // 非限流的失败仍然 5 次就停：那多半是配置问题，等下去没意义。
+      if (reason != 'rate_limit' && attempt >= 5) break;
 
       if (attempt < _policy.maxAttempts) {
         // 退避之前先看一眼：用户可能刚好在这一刻点了停止，
@@ -256,6 +258,7 @@ class LlmClient {
         'model': model,
         'stream': true,
         'temperature': cfg.temperature,
+        ...cfg.reasoningPayload(),
         'messages': convo,
       });
 
@@ -336,6 +339,7 @@ class LlmClient {
         'model': model,
         'messages': convo,
         'temperature': cfg.temperature,
+        ...cfg.reasoningPayload(),
         'stream': false,
         if (hasTools) 'tools': tools,
         if (hasTools) 'tool_choice': 'auto',

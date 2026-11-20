@@ -117,12 +117,19 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.4.0-apk
-          name: SparkShell 3.4.0 (审批只拦危险动作 + 看图模型分档)
+          tag_name: v3.5.0-apk
+          name: SparkShell 3.5.0 (限流自动重试 + 思考深度 + 图片缩略图)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.5.0 — 限流自己扛；思考深度可选；图片能看见**
+            - 改：限流不再半路交回用户。429/额度受限一路退避重试最多 12 次（8s→120s，约 10 分钟），中途恢复就自动接着调工具，不用点「继续」
+            - 改：agent 单轮步数 12 → 40，查环境、装包这种活不再跑一半就停
+            - 新：设置里「思考深度」—— 自动/不思考/低/高/最高，落到 `thinking.type=disabled` 与 `reasoning_effort`
+            - 新：「测思考开关」按钮，用当前接入点实测这个模型认不认「不思考」
+            - 新：带图消息在气泡里显示缩略图，点开可双指缩放看原图
+
             **3.4.0 — 审批只拦危险动作；带图自动切看图模型**
             - 改：工具审批从「每个都问」改成「危险的才问」—— rm -rf /、mkfs、dd of=/dev/、curl|sh、chmod 777 /、su、ssh_exec、写容器外路径等；只读、容器内写直接过
             - 新：设置里可填「看图模型」，只有带图那轮切过去（`ApiConfig.modelFor`），纯文字仍走主模型

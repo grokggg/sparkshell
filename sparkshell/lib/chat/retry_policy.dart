@@ -32,9 +32,9 @@ class RetryOutcome {
 /// ```
 class RetryPolicy {
   const RetryPolicy({
-    this.maxAttempts = 5,
+    this.maxAttempts = 12,
     this.delays = const [1200, 2500, 5000, 9000],
-    this.rateLimitDelays = const [8000, 20000, 45000, 60000],
+    this.rateLimitDelays = const [8000, 20000, 45000, 60000, 60000, 90000, 90000, 120000],
   });
 
   /// 最多试几次（含第一次）

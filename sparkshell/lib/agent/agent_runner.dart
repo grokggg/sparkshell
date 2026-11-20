@@ -28,6 +28,7 @@ class ToolEvent {
 ///
 /// 刻意用非流式：tool_calls 必须完整拿到才能执行，逐帧解析只增风险不增体验。
 /// 每轮最多 maxSteps 次，防止模型自己打转把 token 烧光。
+/// 40 而不是 12：查环境、装包这种活本来就十几步，12 步就停会逼用户一直点「继续」。
 class AgentRunner {
   AgentRunner({
     required this.cfg,
@@ -35,7 +36,7 @@ class AgentRunner {
     required this.onToolResult,
     required this.approve,
     this.onTool,
-    this.maxSteps = 12,
+    this.maxSteps = 40,
     this.onStatus,
     this.cancel,
     this.vision = false,

@@ -32,7 +32,8 @@ class ChatPage extends StatefulWidget {
 }
 
 class _Msg {
-  _Msg(this.role, this.text, {this.tool, this.args, this.ok = true, this.ms = 0});
+  _Msg(this.role, this.text,
+      {this.tool, this.args, this.ok = true, this.ms = 0, this.images = const []});
 
   final String role; // user | assistant | tool
   String text;
@@ -42,6 +43,9 @@ class _Msg {
   final Map<String, dynamic>? args;
   final bool ok;
   final int ms;
+
+  /// 用户消息里带的图片（容器内绝对路径）。有值就渲染缩略图，点开能看大图。
+  final List<String> images;
 }
 
 class _ChatPageState extends State<ChatPage> {
@@ -448,7 +452,7 @@ class _ChatPageState extends State<ChatPage> {
     }
     final reply = _Msg('assistant', '');
     setState(() {
-      _msgs.add(_Msg('user', text));
+      _msgs.add(_Msg('user', text, images: images));
       _msgs.add(reply);
       _busy = true;
       _err = null;
@@ -541,7 +545,7 @@ class _ChatPageState extends State<ChatPage> {
     List<String> images = const <String>[],
   ]) async {
     setState(() {
-      _msgs.add(_Msg('user', text));
+      _msgs.add(_Msg('user', text, images: images));
       _busy = true;
       _err = null;
     });
@@ -687,6 +691,21 @@ class _ChatPageState extends State<ChatPage> {
     return ok ?? false;
   }
 
+
+  /// 点缩略图看原图：双指缩放，点空白关掉。
+  void _previewImage(String path) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        child: InteractiveViewer(
+          maxScale: 5,
+          child: Center(child: Image.file(File(path), fit: BoxFit.contain)),
+        ),
+      ),
+    );
+  }
 
   Widget _pill(IconData icon, String label, VoidCallback onTap) {
     return InkWell(
@@ -1040,6 +1059,7 @@ tags: debian, alpine, toolchain
           .join('\n'),
     );
     var temp = cfg.temperature;
+    var reasoning = cfg.reasoning;
     String? test;
     // 测试连接：点下去必须立刻有反应——按钮转圈 + 结果就近显示 + SnackBar 兜底。
     // 以前结果塞在整段设置的最底部（滚动区外），点了像没反应。
@@ -1106,6 +1126,28 @@ tags: debian, alpine, toolchain
                 maxLines: 3,
                 decoration: const InputDecoration(labelText: '系统提示'),
               ),
+              const SizedBox(height: 4),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('思考深度', style: Theme.of(ctx).textTheme.labelMedium),
+              ),
+              Wrap(
+                spacing: 6,
+                children: [
+                  for (final e in const {
+                    'auto': '自动',
+                    'off': '不思考',
+                    'low': '低',
+                    'high': '高',
+                    'max': '最高',
+                  }.entries)
+                    ChoiceChip(
+                      label: Text(e.value, style: const TextStyle(fontSize: 12)),
+                      selected: reasoning == e.key,
+                      onSelected: (_) => setS(() => reasoning = e.key),
+                    ),
+                ],
+              ),
               Row(children: [
                 const Text('温度'),
                 Expanded(
@@ -1122,6 +1164,22 @@ tags: debian, alpine, toolchain
             ]),
           ),
           actions: [
+            TextButton(
+              onPressed: () async {
+                setS(() => test = '正在测「不思考」开关…');
+                final probe = ApiConfig(
+                  baseUrl: base.text.trim(),
+                  apiKey: key.text.trim(),
+                  model: model.text.trim(),
+                  reasoning: 'off',
+                );
+                final r = await LlmClient(probe).ping();
+                setS(() => test = r.ok
+                    ? '✅ 这个模型接受「不思考」开关（${r.ms}ms）'
+                    : '⚠️ 它不接受或报错：${r.message}');
+              },
+              child: const Text('测思考开关'),
+            ),
             TextButton(
               // 测的过程中禁用，避免连点堆出一串请求
               onPressed: testing
@@ -1175,6 +1233,7 @@ tags: debian, alpine, toolchain
                   ..apiKey = key.text.trim()
                   ..model = model.text.trim()
                   ..visionModel = vmodel.text.trim()
+                  ..reasoning = reasoning
                   ..systemPrompt = sys.text
                   ..temperature = temp;
                 // 备用接入点：一行 `baseUrl|key|model`，空行忽略
@@ -1411,9 +1470,46 @@ tags: debian, alpine, toolchain
                                 title: _toolTitle(m.text),
                                 text: m.text,
                               )
-                            : SelectableText(
-                                m.text.isEmpty ? '…' : m.text,
-                                style: const TextStyle(fontSize: 13, height: 1.4),
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (m.images.isNotEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: Wrap(
+                                        spacing: 6,
+                                        runSpacing: 6,
+                                        children: [
+                                          for (final p in m.images)
+                                            GestureDetector(
+                                              onTap: () => _previewImage(p),
+                                              child: ClipRRect(
+                                                borderRadius: BorderRadius.circular(8),
+                                                child: Image.file(
+                                                  File(p),
+                                                  width: 96,
+                                                  height: 96,
+                                                  fit: BoxFit.cover,
+                                                  errorBuilder: (_, __, ___) => Container(
+                                                    width: 96,
+                                                    height: 96,
+                                                    color: Colors.black12,
+                                                    alignment: Alignment.center,
+                                                    child: const Icon(Icons.broken_image, size: 18),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  if (m.text.isNotEmpty || m.images.isEmpty)
+                                    SelectableText(
+                                      m.text.isEmpty ? '…' : m.text,
+                                      style: const TextStyle(fontSize: 13, height: 1.4),
+                                    ),
+                                ],
                               ),
                       ),
                     );
