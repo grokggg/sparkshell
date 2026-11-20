@@ -6,6 +6,10 @@ permissions:
 on:
   push:
     branches: [main]
+    # 文档/说明类提交不该重打包，更不该覆盖已发布的 APK（哈希会变）
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   workflow_dispatch:
 
 jobs:
@@ -114,11 +118,33 @@ jobs:
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
 
+      - name: Resolve version tag
+        working-directory: sparkshell
+        run: |
+          set -e
+          V=$(grep -m1 '^version:' pubspec.yaml | sed 's/^version:[[:space:]]*//' | cut -d+ -f1)
+          echo "VER=$V" >> "$GITHUB_ENV"
+          echo "TAG=v${V}-apk" >> "$GITHUB_ENV"
+          echo "resolved version=$V  tag=v${V}-apk"
+
+      - name: Gate - do not overwrite a published release
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            echo "::warning::$TAG 已存在，跳过发布（不覆盖已发布的字节与 sha256）"
+          else
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
+        if: steps.gate.outputs.skip == '0'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.8.0-apk
-          name: SparkShell 3.8.0 (长期记忆 + 上下文压缩 + 插件 + 设置中心)
+          tag_name: ${{ env.TAG }}
+          name: SparkShell ${{ env.VER }}
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
