@@ -132,6 +132,7 @@ class LlmClient {
     final base = normalizeBase(cfg.baseUrl);
     HttpException? last;
     var reason = 'network';
+    int? retryAfterMs;
 
     // 等待响应 body 的阶段（chat 的 SSE 流、complete 的 join）都挂在同一个
     // HttpClient 上，所以停止时统一 close(force: true)：dart:io 会直接拆掉
@@ -159,6 +160,8 @@ class LlmClient {
 
         final err = await resp.transform(utf8.decoder).join();
         final out = _policy.judge(statusCode: resp.statusCode, body: err);
+        // 服务端说「多久之后再来」就听它的（秒或 HTTP 日期），但 RetryPolicy 会夹在 1–5 秒。
+        retryAfterMs = _parseRetryAfter(resp.headers.value('retry-after'));
         reason = out.reason;
         // 带上状态码和原文：图片降级要靠这两个判断「是不是模型看不懂图」，
         // 而 400 的重试判定依然走 RetryPolicy（4xx 一律不重试）。
@@ -198,7 +201,7 @@ class LlmClient {
           _abort();
           throw const _Cancelled();
         }
-        final wait = _policy.delayFor(attempt, reason);
+        final wait = _policy.delayFor(attempt, reason, retryAfterMs: retryAfterMs);
         // 前 8 次每次都在界面上报数；8 次之后只在每 8 次提醒一下，
         // 后台照旧 1–2 秒一发 —— 用户要的是「快」，不是「每秒刷一行字」。
         if (attempt < 8 || attempt % 8 == 0) {
@@ -214,7 +217,23 @@ class LlmClient {
     throw last ?? const HttpException('请求失败');
   }
 
-  /// 等重试退避，但 `whenCancelled` 一完成就立刻醒来（用户点停止不用等完这 8/20 秒）。
+  /// `Retry-After`：秒数或 HTTP 日期两种写法都见过。解析不出来就返回 null，走默认节奏。
+  static int? _parseRetryAfter(String? raw) {
+    if (raw == null) return null;
+    final t = raw.trim();
+    if (t.isEmpty) return null;
+    final secs = int.tryParse(t);
+    if (secs != null) return secs * 1000;
+    try {
+      final when = HttpDate.parse(t);
+      final ms = when.difference(DateTime.now()).inMilliseconds;
+      return ms > 0 ? ms : 0;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 等重试退避，但 `whenCancelled` 一完成就立刻醒来（用户点停止不用等完这一轮）。
   Future<void> _sleep(int ms, CancelToken? cancel) {
     final wait = Future<void>.delayed(Duration(milliseconds: ms));
     if (cancel == null) return wait;

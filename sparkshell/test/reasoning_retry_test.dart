@@ -58,6 +58,15 @@ void main() {
       expect(p.delayFor(9, 'rate_limit'), p.delayFor(9, 'rate_limit'));
     });
 
+    test('服务端给了 Retry-After 也照办，但夹在 1–5 秒', () {
+      expect(p.delayFor(1, 'rate_limit', retryAfterMs: 1), p.delayFor(1, 'rate_limit'));
+      expect(p.delayFor(1, 'rate_limit', retryAfterMs: 60000), lessThanOrEqualTo(5200));
+      expect(p.delayFor(1, 'rate_limit', retryAfterMs: 9000), greaterThanOrEqualTo(1000));
+      expect(p.delayFor(1, 'rate_limit', retryAfterMs: 9000), lessThanOrEqualTo(5200));
+      // 非限流的失败不受 retry-after 影响
+      expect(p.delayFor(1, 'server', retryAfterMs: 60000), lessThanOrEqualTo(2600));
+    });
+
     test('第 8 次之后不再喊「第 N 次重试」，改说后台还在打', () {
       expect(progressText(3, 0, reason: 'rate_limit', delayMs: 1200), contains('再试'));
       final late = progressText(12, 0, reason: 'rate_limit', delayMs: 1200);

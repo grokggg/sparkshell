@@ -50,9 +50,31 @@ class RetryPolicy {
   /// 只是不再刷界面。这里的曲线只在 1–2.2 秒之间抖，越界就从头循环。
   final List<int> rateLimitDelays;
 
-  /// 按故障类型取等待时间；两种都走「固定区间 + 抖动」，不做指数增长。
-  int delayFor(int attempt, String reason) =>
-      _pick(reason == 'rate_limit' ? rateLimitDelays : delays, attempt);
+  /// 「喘一口气」的上下限：下界 1 秒（不停手），上界 5 秒（对方给了 retry-after 也照办）。
+  static const minPauseMs = 1000;
+  static const maxPauseMs = 5000;
+
+  /// dsh-go 的做法（AOT 快照里能捞到的常量名与文案）：
+  /// `chatRequestRetryLimit` / `chatRequestRetryAttempt` / `retry-after` /
+  /// `backoff` / `LlmRetryEvent`，配一句 `429. A breather, then retry`。
+  /// 翻成人话：**固定次数 + 短喘气**，服务端给了 `Retry-After` 就照它等；
+  /// 不是指数退避，不会退到几十秒。
+  ///
+  /// 失败原因如果是限流，优先信 `retryAfterMs`（来自响应头），
+  /// 但夹在 [minPauseMs, maxPauseMs] 里：头里写 60 秒也不能真睡 60 秒，
+  /// 免费池子等 60 秒这一轮就没了。
+  int delayFor(int attempt, String reason, {int? retryAfterMs}) {
+    if (reason == 'rate_limit' && retryAfterMs != null && retryAfterMs > 0) {
+      final v = retryAfterMs + ((attempt * 137) % 200); // 小小错峰，别和同池子的人撞点
+      return v < minPauseMs
+          ? minPauseMs
+          : (v > maxPauseMs ? maxPauseMs : v);
+    }
+    final base = _pick(reason == 'rate_limit' ? rateLimitDelays : delays, attempt);
+    return base < minPauseMs
+        ? minPauseMs
+        : (base > maxPauseMs ? maxPauseMs : base);
+  }
 
   /// 在基准值上抖 ±300ms：固定节奏容易和别人的重试撞在同一毫秒。
   int _pick(List<int> list, int attempt) {

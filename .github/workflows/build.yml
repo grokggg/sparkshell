@@ -117,12 +117,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.6.1-apk
-          name: SparkShell 3.6.1 (限流改快节奏重试：1-2 秒，不指数退避)
+          tag_name: v3.6.2-apk
+          name: SparkShell 3.6.2 (照作者口径：breather + Retry-After，1-5 秒)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.6.2 — 按 dsh-go 的 retry-after 口径**
+            - 新：读响应头 `Retry-After`（秒或 HTTP 日期），照它等，但夹在 1–5 秒
+            - 新：`docs/dsh-retry-design.md` 记录逆向结论 —— REA 库里没有这段逻辑（unified snapshot 不支持），
+              证据是 AOT 快照里的 `chatRequestRetryLimit` / `retry-after` / `429. A breather, then retry`
+            - 保持：1–2.2 秒节奏、8 次报数后静默继续、永不指数退避
+
             **3.6.1 — 限流拼手速，不拼耐心**
             - 改：429 不再指数退避（原来 8s→120s，8 次要等几分钟）。现在全程 1–2.5 秒，越界也不放大
             - 改：前 8 次逐次报数；第 8 次之后界面不再刷新，后台仍按同样节奏打 —— 和原作者一致
