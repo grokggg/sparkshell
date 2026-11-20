@@ -228,10 +228,14 @@ class AgentRunner {
         }
         // 每步开头先看取消：上一步工具刚跑完那一刻点的停止，不该再多发一轮请求
         if (_stopRequested()) return;
+        // 让界面一直看得见「它在干什么」：不发这条，用户面对静态界面不知道是不是卡了
+        onStatus?.call(step == 1 ? '第 1 步 · 正在想…' : '第 $step 步 · 正在想…');
 
         // 停止时 HttpClient 被 close(force: true)，挂着的请求会以
         // SocketException / HttpException 冒出来；这类异常由下面的 catch 统一收口
         final msg = await client.complete(messages, tools: Tools.specs, cancel: cancel);
+        // 退避文案（「限流…等 45 秒」）不能留到这一步：请求已经回来了，还挂着就是假消息
+        onStatus?.call('第 $step 步 · 收到回复…');
         final raw = (msg['content'] as String?) ?? '';
         final calls = msg['tool_calls'] as List?;
         // 卡住判定：模型自己打转时（同一个命令连着发 3 次、结果没变化），
@@ -275,6 +279,7 @@ class AgentRunner {
           final ok = await approve(t.name, t.args);
           if (_stopRequested()) return;
           final sw = Stopwatch()..start();
+          onStatus?.call('正在执行 ${t.name}…');
           final out = ok ? await Tools.run(t.name, t.args) : '用户拒绝执行';
           sw.stop();
           final cb = onTool;
@@ -311,6 +316,7 @@ class AgentRunner {
           final ok = await approve(name, args);
           if (_stopRequested()) return;
           final sw = Stopwatch()..start();
+          onStatus?.call('正在执行 $name…');
           final out = ok ? await Tools.run(name, args) : '用户拒绝执行';
           sw.stop();
           final cb = onTool;

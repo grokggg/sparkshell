@@ -1363,10 +1363,15 @@ tags: debian, alpine, toolchain
               ),
             ]),
           ),
-        if (_status != null && (_busy || _stopping))
+        // 只要在跑就一定要有一条状态：模型想、跑工具、限流退避，三种都得看得见。
+        // 以前只有「重试」才设 _status，正常跑的时候这条横幅根本不出现。
+        if (_busy || _stopping)
           Container(
             width: double.infinity,
-            color: Colors.amber.withOpacity(0.12),
+            color: (_status?.contains('限流') ?? false) ||
+                    (_status?.contains('不稳定') ?? false)
+                ? Colors.amber.withOpacity(0.12)
+                : Colors.transparent,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             child: Row(children: [
               const SizedBox(
@@ -1375,7 +1380,14 @@ tags: debian, alpine, toolchain
                 child: CircularProgressIndicator(strokeWidth: 1.6),
               ),
               const SizedBox(width: 8),
-              Text(_status!, style: const TextStyle(fontSize: 11)),
+              Expanded(
+                child: Text(
+                  _stopping ? (_status ?? '正在停止…') : (_status ?? '正在想…'),
+                  style: const TextStyle(fontSize: 11),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ]),
           ),
         if (_err != null)
@@ -1435,7 +1447,7 @@ tags: debian, alpine, toolchain
                           if (head && n > 1)
                             Padding(
                               padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
-                              child: Text('已完成 · $n 次工具调用',
+                              child: Text(_busy ? '执行中 · $n 次工具调用' : '已完成 · $n 次工具调用',
                                   style: const TextStyle(fontSize: 11, color: Color(0xFF6B7899))),
                             ),
                           Padding(
