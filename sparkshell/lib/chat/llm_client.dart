@@ -569,6 +569,38 @@ class LlmClient {
     }
   }
 
+  /// 拉一份这个接入点认的模型名（`GET /v1/models`）。
+  ///
+  /// 只用来填「输入框上方的模型列表」；失败返回空列表而不是抛异常——
+  /// 用户点的是个下拉框，不是命令行，不该因为一次 401 就弹红条。
+  Future<List<String>> listModels({Duration timeout = const Duration(seconds: 20)}) async {
+    final base = normalizeBase(cfg.baseUrl);
+    if (base.isEmpty || cfg.apiKey.trim().isEmpty) return const [];
+    final client = HttpClient()..connectionTimeout = timeout;
+    try {
+      final req = await client.getUrl(Uri.parse('$base/models'));
+      req.headers.set('Authorization', 'Bearer ${cfg.apiKey.trim()}');
+      req.headers.set('Accept', 'application/json');
+      final resp = await req.close().timeout(timeout);
+      final body = await resp.transform(utf8.decoder).join().timeout(timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return const [];
+      final m = jsonDecode(body);
+      final src = (m is Map && m['data'] is List)
+          ? (m['data'] as List)
+          : (m is List ? m : const []);
+      final out = <String>[];
+      for (final e in src) {
+        final id = e is Map ? '${e['id'] ?? e['name'] ?? ''}' : '$e';
+        if (id.trim().isNotEmpty && !out.contains(id.trim())) out.add(id.trim());
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// 兼容旧调用：只要一句人话，永远不抛异常。
   ///
   /// 新的 UI 用 [ping] 拿 [PingResult]（要显示耗时/决定图标）；仍在等字符串的

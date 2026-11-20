@@ -55,6 +55,32 @@ class ApiConfig {
     }
   }
 
+  /// 这一台接入点上见过的模型（`GET /v1/models` 拉回来的 + 手填的）。
+  /// 只做“输入框上方那排能选什么”的候选，不参与请求体；换接入点后可以重拉。
+  final List<String> models = [];
+
+  /// 用户手动标注过「这个模型到底吃不吃思考参数」。
+  /// 名字猜不准的（比如 `qiniu/conatus-free`）由这里兜底，true=显示思考档位。
+  final Map<String, bool> thinkingSupport = {};
+
+  /// 名字里带这些的，基本都吃 `reasoning_effort` / `thinking`：
+  /// reasoner / thinking / r1 / qwq / qwen3 / glm-4.5 / z1 / kimi-k2 / o1-o4 / gpt-5。
+  static bool looksThinking(String id) => RegExp(
+        r'(reasoner|thinking|deepseek-r1|qwq|qwen3|glm-4\.5|glm-z1|kimi-k2|(^|[/-])o[1-4]([/-]|$)|gpt-5)',
+        caseSensitive: false,
+      ).hasMatch(id);
+
+  bool supportsThinking(String id) => thinkingSupport[id] ?? looksThinking(id);
+
+  /// 记住一个模型名（放最前面，去重），只改内存，落盘由调用方决定。
+  void rememberModel(String id) {
+    final m = id.trim();
+    if (m.isEmpty) return;
+    models.remove(m);
+    models.insert(0, m);
+    if (models.length > 80) models.removeRange(80, models.length);
+  }
+
   /// 备用接入点：轮换用，元素是 {baseUrl, apiKey, model}。
   /// 主接入点 5xx / 连不上时，自动切到下一个，并把能用的那个转正。
   final List<Map<String, String>> backups = [];
@@ -102,6 +128,20 @@ class ApiConfig {
         reasoning: m['reasoning'] as String? ?? 'auto',
       );
       cfg.filesDir = filesDir;
+      final ms = m['models'];
+      if (ms is List) {
+        for (final e in ms) {
+          final v = '$e'.trim();
+          if (v.isNotEmpty && !cfg.models.contains(v)) cfg.models.add(v);
+        }
+      }
+      final ts = m['thinking'];
+      if (ts is Map) {
+        ts.forEach((k, v) {
+          if (v is bool) cfg.thinkingSupport['$k'] = v;
+        });
+      }
+      if (cfg.models.isEmpty) cfg.models.add(cfg.model);
       final bs = m['backups'];
       if (bs is List) {
         for (final e in bs) {
@@ -130,6 +170,8 @@ class ApiConfig {
       'systemPrompt': systemPrompt,
       'temperature': temperature,
       'reasoning': reasoning,
+      'models': models,
+      'thinking': thinkingSupport,
       'backups': backups,
     }), flush: true);
     this.filesDir = filesDir;

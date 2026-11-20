@@ -83,4 +83,55 @@ void main() {
       expect(p.judge(statusCode: 401).retry, isFalse);
     });
   });
+
+  group('模型列表与思考能力', () {
+    test('名字能猜出吃不吃思考参数', () {
+      for (final m in [
+        'deepseek-reasoner',
+        'deepseek-r1',
+        'qwq-plus',
+        'qwen3-max',
+        'glm-4.5',
+        'kimi-k2-thinking',
+        'o3-mini',
+        'gpt-5',
+      ]) {
+        expect(ApiConfig.looksThinking(m), isTrue, reason: m);
+      }
+      for (final m in ['qiniu/conatus-free', 'gpt-4o-mini', 'qwen-vl-max', 'llama-3-8b']) {
+        expect(ApiConfig.looksThinking(m), isFalse, reason: m);
+      }
+    });
+
+    test('手动标注优先于名字猜测', () {
+      final c = ApiConfig()..thinkingSupport['qiniu/conatus-free'] = true;
+      expect(c.supportsThinking('qiniu/conatus-free'), isTrue);
+      c.thinkingSupport['deepseek-reasoner'] = false;
+      expect(c.supportsThinking('deepseek-reasoner'), isFalse);
+    });
+
+    test('rememberModel 去重并放最前', () {
+      final c = ApiConfig()..models.addAll(['b', 'a']);
+      c.rememberModel('a');
+      expect(c.models, ['a', 'b']);
+      c.rememberModel('  ');
+      expect(c.models.length, 2);
+    });
+
+    test('模型清单与标注能落盘再读回', () async {
+      final dir = await Directory.systemTemp.createTemp('cfg');
+      final c = ApiConfig()
+        ..model = 'deepseek-reasoner'
+        ..reasoning = 'high'
+        ..models.addAll(['deepseek-reasoner', 'qwen3-max'])
+        ..thinkingSupport['qiniu/conatus-free'] = true;
+      await c.save(dir.path);
+      final d = await ApiConfig.load(dir.path);
+      expect(d.model, 'deepseek-reasoner');
+      expect(d.reasoning, 'high');
+      expect(d.models, containsAll(['deepseek-reasoner', 'qwen3-max']));
+      expect(d.supportsThinking('qiniu/conatus-free'), isTrue);
+      await dir.delete(recursive: true);
+    });
+  });
 }

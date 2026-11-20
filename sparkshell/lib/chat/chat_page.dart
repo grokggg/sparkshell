@@ -799,6 +799,207 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  /// 输入框上方那条「模型 · 思考档」：点一下就能换，不用退回设置页。
+  ///
+  /// 产品口径：换模型是「选一个名字」，不是「改一个配置项」；
+  /// 所以放在手边，一次点击到底。
+  Widget _modelBar() {
+    final cfg = _cfg;
+    if (cfg == null) return const SizedBox.shrink();
+    final name = _shortModel(cfg.model);
+    final lvl = _reasonLabel(cfg.reasoning);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 6, bottom: 2),
+        child: InkWell(
+          onTap: _modelSheet,
+          borderRadius: BorderRadius.circular(14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1B2231),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFF2C3648)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.memory, size: 13, color: Color(0xFF8FA0BC)),
+              const SizedBox(width: 5),
+              Text('$name · $lvl',
+                  style: const TextStyle(fontSize: 12, color: Color(0xFFB9C6DC))),
+              const Icon(Icons.expand_more, size: 14, color: Color(0xFF8FA0BC)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _shortModel(String m) {
+    final s = m.contains('/') ? m.split('/').last : m;
+    return s.length > 20 ? '${s.substring(0, 20)}…' : s;
+  }
+
+  String _reasonLabel(String r) {
+    switch (r) {
+      case 'off':
+        return '不思考';
+      case 'low':
+        return '低';
+      case 'high':
+        return '高';
+      case 'max':
+        return '极高';
+      default:
+        return '自动';
+    }
+  }
+
+  static const _reasonOptions = <List<String>>[
+    ['auto', '自动'],
+    ['off', '不思考'],
+    ['low', '低'],
+    ['high', '高'],
+    ['max', '极高'],
+  ];
+
+  /// 模型 + 思考档的底部弹层。
+  ///
+  /// 三件事在这里一次说完：这台接入点有哪些模型、当前是哪个、
+  /// 这个模型吃不吃思考参数（吃就列四档，不吃就灰掉但允许手动开）。
+  Future<void> _modelSheet() async {
+    final cfg = _cfg;
+    final dir = _filesDir;
+    if (cfg == null) return;
+    final list = <String>[...cfg.models];
+    if (!list.contains(cfg.model)) list.insert(0, cfg.model);
+    if (list.isEmpty) list.add(cfg.model);
+    var sel = cfg.model;
+    var lvl = cfg.reasoning;
+    var loading = false;
+    var hint = '';
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF141A24),
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSheet) {
+        final sup = cfg.supportsThinking(sel);
+        Future<void> pull() async {
+          setSheet(() => loading = true);
+          final got = await LlmClient(cfg).listModels();
+          setSheet(() {
+            loading = false;
+            if (got.isEmpty) {
+              hint = '接入点没给出模型列表（可能不支持 /models），可以去设置里手填';
+              return;
+            }
+            hint = '拉到 ${got.length} 个模型';
+            for (final m in got) {
+              cfg.rememberModel(m);
+              if (!list.contains(m)) list.insert(0, m);
+            }
+          });
+        }
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
+                const Text('选择模型',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: loading ? null : pull,
+                  icon: loading
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.refresh, size: 15),
+                  label: const Text('从接入点拉取', style: TextStyle(fontSize: 12)),
+                ),
+              ]),
+              if (hint.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(hint,
+                        style: const TextStyle(
+                            fontSize: 11, color: Color(0xFF8FA0BC))),
+                  ),
+                ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final m in list)
+                      ListTile(
+                        dense: true,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                        title: Text(m, style: const TextStyle(fontSize: 13)),
+                        subtitle: cfg.supportsThinking(m)
+                            ? const Text('支持思考',
+                                style: TextStyle(fontSize: 11, color: Color(0xFF6FA8FF)))
+                            : null,
+                        trailing: m == sel
+                            ? const Icon(Icons.check, size: 17, color: Color(0xFF6FA8FF))
+                            : null,
+                        onTap: () => setSheet(() => sel = m),
+                      ),
+                  ],
+                ),
+              ),
+              const Divider(height: 18),
+              Row(children: [
+                const Text('思考深度', style: TextStyle(fontSize: 13)),
+                const SizedBox(width: 8),
+                Text(sup ? '这个模型吃思考参数' : '名字看不出支持，可手动开',
+                    style:
+                        const TextStyle(fontSize: 11, color: Color(0xFF8FA0BC))),
+              ]),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                children: [
+                  for (final o in _reasonOptions)
+                    ChoiceChip(
+                      label: Text(o[1], style: const TextStyle(fontSize: 12)),
+                      selected: lvl == o[0],
+                      onSelected: sup ? (_) => setSheet(() => lvl = o[0]) : null,
+                    ),
+                ],
+              ),
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: sup,
+                title: const Text('这个模型支持思考', style: TextStyle(fontSize: 12)),
+                onChanged: (v) => setSheet(() => cfg.thinkingSupport[sel] = v),
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () async {
+                    cfg.model = sel;
+                    cfg.rememberModel(sel);
+                    cfg.reasoning = lvl;
+                    if (dir != null) await cfg.save(dir);
+                    if (mounted) setState(() {});
+                    if (ctx.mounted) Navigator.pop(ctx);
+                  },
+                  child: const Text('用这个模型'),
+                ),
+              ),
+            ]),
+          ),
+        );
+      }),
+    );
+  }
+
   Widget _pill(IconData icon, String label, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
@@ -1664,6 +1865,7 @@ tags: debian, alpine, toolchain
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               if (_pending.isNotEmpty) _attachStrip(),
+              _modelBar(),
               Row(children: [
               IconButton(
                 tooltip: '添加图片或文件',

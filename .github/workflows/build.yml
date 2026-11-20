@@ -117,12 +117,18 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.6.2-apk
-          name: SparkShell 3.6.2 (照作者口径：breather + Retry-After，1-5 秒)
+          tag_name: v3.7.0-apk
+          name: SparkShell 3.7.0 (输入框上方直接换模型、选思考档)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.7.0 — 模型和思考档搬到输入框上方**
+            - 新：输入框左上一个胶囊，显示「模型 · 思考档」，点开就是底部弹层
+            - 新：弹层里能选模型，也能「从接入点拉取」`/v1/models` 的清单
+            - 新：吃得下思考参数的模型直接列五档（自动/不思考/低/高/极高）；猜不准的可手动开开关
+            - 改：选完立刻落盘并生效，不用退回设置页
+
             **3.6.2 — 按 dsh-go 的 retry-after 口径**
             - 新：读响应头 `Retry-After`（秒或 HTTP 日期），照它等，但夹在 1–5 秒
             - 新：`docs/dsh-retry-design.md` 记录逆向结论 —— REA 库里没有这段逻辑（unified snapshot 不支持），
