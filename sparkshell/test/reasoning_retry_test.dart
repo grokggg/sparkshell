@@ -49,9 +49,20 @@ void main() {
       expect(p.maxAttempts, greaterThanOrEqualTo(10));
     });
 
-    test('限流退避一路到 60 秒以上，且不会越界崩', () {
-      expect(p.delayFor(4, 'rate_limit'), greaterThanOrEqualTo(60000));
-      expect(p.delayFor(99, 'rate_limit'), p.rateLimitDelays.last);
+    test('限流不搞指数退避：1-2.5 秒，越界也不放大', () {
+      for (var a = 1; a <= 200; a++) {
+        final ms = p.delayFor(a, 'rate_limit');
+        expect(ms, inInclusiveRange(500, 2600), reason: '第 $a 次等了 $ms ms');
+      }
+      // 抖动用固定公式，不是随机数：同样入参必须有同样结果
+      expect(p.delayFor(9, 'rate_limit'), p.delayFor(9, 'rate_limit'));
+    });
+
+    test('第 8 次之后不再喊「第 N 次重试」，改说后台还在打', () {
+      expect(progressText(3, 0, reason: 'rate_limit', delayMs: 1200), contains('再试'));
+      final late = progressText(12, 0, reason: 'rate_limit', delayMs: 1200);
+      expect(late, contains('后台仍在重试'));
+      expect(late, contains('第 12 次'));
     });
 
     test('429 判成可重试的 rate_limit', () {

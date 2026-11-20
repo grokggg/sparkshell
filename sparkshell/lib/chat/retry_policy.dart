@@ -33,8 +33,8 @@ class RetryOutcome {
 class RetryPolicy {
   const RetryPolicy({
     this.maxAttempts = 12,
-    this.delays = const [1200, 2500, 5000, 9000],
-    this.rateLimitDelays = const [8000, 20000, 45000, 60000, 60000, 90000, 90000, 120000],
+    this.delays = const [1000, 1500, 1200, 1800],
+    this.rateLimitDelays = const [1000, 1500, 1200, 1800, 2200, 1500, 1200, 2000],
   });
 
   /// 最多试几次（含第一次）
@@ -43,20 +43,25 @@ class RetryPolicy {
   /// 每次失败后的等待毫秒数，长度应 >= maxAttempts-1
   final List<int> delays;
 
-  /// 限流（429）专用的退避：免费额度被打穿时，1-2 秒重试只会再吃一次 429，
-  /// 必须等够时间让对方的计数窗口滑过去。
+  /// 限流（429）的等待：**不递增**，全程 1–2.5 秒。
+  ///
+  /// 免费池子是按秒抢的：指数退避（8s→120s）等于把这一轮额度让给别人。
+  /// 原作者的做法就是 8 次、每次一两秒；8 次之后继续用同样的节奏打，
+  /// 只是不再刷界面。这里的曲线只在 1–2.2 秒之间抖，越界就从头循环。
   final List<int> rateLimitDelays;
 
-  /// 按故障类型取等待时间；限流走更长的那条曲线。
+  /// 按故障类型取等待时间；两种都走「固定区间 + 抖动」，不做指数增长。
   int delayFor(int attempt, String reason) =>
       _pick(reason == 'rate_limit' ? rateLimitDelays : delays, attempt);
 
+  /// 在基准值上抖 ±300ms：固定节奏容易和别人的重试撞在同一毫秒。
   int _pick(List<int> list, int attempt) {
     if (list.isEmpty) return 0;
-    final i = attempt - 1;
-    if (i <= 0) return list.first;
-    if (i >= list.length) return list.last;
-    return list[i];
+    final i = ((attempt - 1) % list.length + list.length) % list.length;
+    final base = list[i];
+    final jitter = ((attempt * 7919) % 601) - 300;
+    final v = base + jitter;
+    return v < 500 ? 500 : v;
   }
 
   /// attempt 从 1 开始，返回第 attempt 次失败后要等多久；越界返回最后一个。
@@ -154,7 +159,11 @@ String progressText(int attempt, int maxAttempts, {String? reason, int? delayMs}
   final n = unlimited ? '第 $a 次' : '$a/$max';
   final secs = delayMs == null ? null : (delayMs / 1000).round();
   if (reason == 'rate_limit') {
-    return secs == null ? '限流了，正在退避重试 $n…' : '限流（429）：等 $secs 秒再发，$n';
+    // 8 次之后界面不再跟着刷新，但后台仍在按同样节奏打；这句要让用户知道它没停。
+    if (a > 8) {
+      return secs == null ? '限流中，后台仍在重试（第 $a 次）…' : '限流中，后台仍在重试（第 $a 次，$secs 秒后）';
+    }
+    return secs == null ? '限流了，正在重试 $n…' : '限流（429）：$secs 秒后再试，$n';
   }
   return secs == null ? '连接不稳定，正在重试 $n…' : '连接不稳定：等 $secs 秒重试，$n';
 }

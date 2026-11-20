@@ -190,6 +190,7 @@ class LlmClient {
 
       // 不可重试的错误（Key 错、模型名错、参数非法）在上面就已经 throw 了，
       // 能走到这里的只有限流 / 网络 / 5xx / 超时 —— 这些一律继续等，不交回用户。
+      // 节奏固定 1–2.5 秒：免费池子拼手速，慢一步就让别人抢走了。
       {
         // 退避之前先看一眼：用户可能刚好在这一刻点了停止，
         // 不然这次 delay 完还要再发一次请求才轮到检查。
@@ -198,8 +199,11 @@ class LlmClient {
           throw const _Cancelled();
         }
         final wait = _policy.delayFor(attempt, reason);
-        onRetry?.call(
-            progressText(attempt + 1, 0, reason: reason, delayMs: wait));
+        // 前 8 次每次都在界面上报数；8 次之后只在每 8 次提醒一下，
+        // 后台照旧 1–2 秒一发 —— 用户要的是「快」，不是「每秒刷一行字」。
+        if (attempt < 8 || attempt % 8 == 0) {
+          onRetry?.call(progressText(attempt + 1, 0, reason: reason, delayMs: wait));
+        }
         await _sleep(wait, c);
         if (c != null && c.isCancelled) {
           _abort();

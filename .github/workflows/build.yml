@@ -117,12 +117,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.6.0-apk
-          name: SparkShell 3.6.0 (消息可复制/改后重发/开分支)
+          tag_name: v3.6.1-apk
+          name: SparkShell 3.6.1 (限流改快节奏重试：1-2 秒，不指数退避)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.6.1 — 限流拼手速，不拼耐心**
+            - 改：429 不再指数退避（原来 8s→120s，8 次要等几分钟）。现在全程 1–2.5 秒，越界也不放大
+            - 改：前 8 次逐次报数；第 8 次之后界面不再刷新，后台仍按同样节奏打 —— 和原作者一致
+            - 新：文案区分「正在重试」与「限流中，后台仍在重试（第 N 次）」
+
             **3.6.0 — 消息是能动的**
             - 新：每条消息右下角三点 → 复制、编辑后重发、从这里开分支（长按也走同一个菜单）
             - 编辑后重发：从这条起截断，改完发出去就按新说法重跑，不叠一条新的
