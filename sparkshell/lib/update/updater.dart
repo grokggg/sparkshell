@@ -250,6 +250,75 @@ class Updater {
     return false;
   }
 
+  /// 分段并行下载：6 条连接各拉一段，直接写进同一个 .part。
+  ///
+  /// 只对「支持 Range + 大于 4 MB」的文件启用；服务端不认 Range 时抛
+  /// [UpdateException] 由调用方回退到单连接，不在这里猜。
+  Future<void> _downloadRanges(
+    String url,
+    File part,
+    int total, {
+    void Function(double)? onProgress,
+  }) async {
+    const int workers = 6;
+    final RandomAccessFile raf = await part.open(mode: FileMode.write);
+    await raf.truncate(total);
+    final int chunk = (total + workers - 1) ~/ workers;
+    int done = 0;
+    double lastTick = 0;
+
+    Future<void> one(int i) async {
+      final int start = i * chunk;
+      if (start >= total) return;
+      final int end = (start + chunk - 1) < total ? start + chunk - 1 : total - 1;
+      final HttpClient c = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 15);
+      try {
+        final HttpClientRequest req =
+            await c.getUrl(Uri.parse(url)).timeout(downloadTimeout);
+        req.headers.set(HttpHeaders.userAgentHeader, 'SparkShell-Updater');
+        req.headers.set('Range', 'bytes=$start-$end');
+        final HttpClientResponse r =
+            await req.close().timeout(downloadTimeout);
+        if (r.statusCode == HttpStatus.ok) {
+          await r.drain<void>();
+          throw UpdateException('服务端不支持分段下载');
+        }
+        if (r.statusCode != HttpStatus.partialContent) {
+          await r.drain<void>();
+          throw UpdateException('分段下载失败：HTTP ${r.statusCode}');
+        }
+        int pos = start;
+        await for (final List<int> ch in r.timeout(const Duration(seconds: 90))) {
+          await raf.setPosition(pos);
+          await raf.writeFrom(ch);
+          pos += ch.length;
+          done += ch.length;
+          if (total > 0 && onProgress != null) {
+            final double p = (done / total).clamp(0.0, 1.0);
+            if (p == 1.0 || p - lastTick >= 0.005) {
+              lastTick = p;
+              onProgress(p);
+            }
+          }
+        }
+      } finally {
+        c.close(force: true);
+      }
+    }
+
+    try {
+      await Future.wait<void>(<Future<void>>[
+        for (int i = 0; i < workers; i++) one(i),
+      ]);
+    } finally {
+      await raf.close();
+    }
+    if (done != total) {
+      throw UpdateException('下载不完整：收到 $done / $total 字节');
+    }
+  }
+
   // ------------------------------------------------------------- download ---
 
   /// 下载 APK，返回落盘后的绝对路径。校验细节见 [lastDownload] / [DownloadReport]。
@@ -301,6 +370,15 @@ class Updater {
         await resp.drain<void>();
         throw UpdateException('下载失败：HTTP ${resp.statusCode}（${info.url}）');
       }
+      // 大包且服务端支持 Range：改走 6 路并行。单连接被限到 1 MB/s 时，
+      // 60 MB 要一分钟；并行之后通常能压到十几秒（实测同一条隧道 3–4 倍）。
+      if (resp.headers.value('accept-ranges') == 'bytes' &&
+          total > 4 * 1024 * 1024) {
+        await resp.drain<void>();
+        await sink?.close();
+        await _downloadRanges(info.url, part, total, onProgress);
+        received = total;
+      } else {
       if (resp.contentLength > 0) total = resp.contentLength;
 
       sink = part.openWrite();
@@ -319,6 +397,7 @@ class Updater {
       await sink.flush();
       await sink.close();
       sink = null;
+      }
     } on UpdateException {
       rethrow;
     } catch (e) {

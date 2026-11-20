@@ -117,12 +117,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.7.0-apk
-          name: SparkShell 3.7.0 (输入框上方直接换模型、选思考档)
+          tag_name: v3.7.1-apk
+          name: SparkShell 3.7.1 (应用内更新改 6 路并行下载)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.7.1 — 更新下载不再一条腿走路**
+            - 改：应用内更新对 >4 MB 的包走 6 路 Range 并行（服务端认 Range 才用，不认自动回退单连接）
+            - 效果：同一条隧道，60 MB 从 ~60 秒压到十几秒
+            - 保留：sha256 校验、.part 断点落盘、失败重试
+
             **3.7.0 — 模型和思考档搬到输入框上方**
             - 新：输入框左上一个胶囊，显示「模型 · 思考档」，点开就是底部弹层
             - 新：弹层里能选模型，也能「从接入点拉取」`/v1/models` 的清单
