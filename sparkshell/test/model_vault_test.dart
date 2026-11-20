@@ -132,5 +132,23 @@ void main() {
       expect(sel.contains('new-one'), isTrue);
       expect(again.vault.find('old')!.pinned, isTrue);
     });
+
+    test('删掉的模型不会被旧 models 字段吸回来（删了又活是回归）', () async {
+      final dir = Directory.systemTemp.createTempSync('vault-del');
+      addTearDown(() => dir.deleteSync(recursive: true));
+
+      final cfg = ApiConfig(baseUrl: 'https://a/v1', apiKey: 'k', model: 'keep')
+        ..filesDir = dir.path;
+      cfg.pinModel('keep');
+      cfg.pinModel('drop-me');
+      expect(cfg.selectableModels.contains('drop-me'), isTrue);
+
+      cfg.removeModel('drop-me');
+      expect(cfg.selectableModels.contains('drop-me'), isFalse);
+      expect(cfg.models.contains('drop-me'), isFalse);
+
+      final again = await ApiConfig.load(dir.path);
+      expect(again.selectableModels.contains('drop-me'), isFalse);
+    });
   });
 }

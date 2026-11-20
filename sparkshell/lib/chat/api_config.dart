@@ -116,6 +116,8 @@ class ApiConfig {
     for (final e in vault.entries) {
       if (e.id == name) vault.remove(e.id, baseUrl: e.baseUrl);
     }
+    // 先从旧字段里摘掉，否则 _syncLegacyModels 的并集会把它当「老数据」吸回来 —— 删了又活。
+    models.removeWhere((e) => e.trim() == name);
     _afterVaultChange();
   }
 
