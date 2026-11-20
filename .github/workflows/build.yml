@@ -117,12 +117,17 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.5.2-apk
-          name: SparkShell 3.5.2 (跑起来看得见：状态横幅常驻)
+          tag_name: v3.6.0-apk
+          name: SparkShell 3.6.0 (消息可复制/改后重发/开分支)
           files: |
             /tmp/app-alpine.apk
             /tmp/app-debian.apk
           body: |
+            **3.6.0 — 消息是能动的**
+            - 新：每条消息右下角三点 → 复制、编辑后重发、从这里开分支（长按也走同一个菜单）
+            - 编辑后重发：从这条起截断，改完发出去就按新说法重跑，不叠一条新的
+            - 开分支：新会话带走这条及之前全部记录，原会话原样保留，两条线互不影响
+
             **3.5.2 — 跑起来看得见**
             - 修：状态横幅以前只有「重试」时才出现，正常跑的时候整条不显示 —— 现在只要在跑就有
             - 新：横幅实时显示「第 N 步 · 正在想…」/「正在执行 bash…」/「限流（429）：等 45 秒再发，第 4 次」

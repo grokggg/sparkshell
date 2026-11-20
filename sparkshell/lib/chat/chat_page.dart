@@ -53,6 +53,9 @@ class _ChatPageState extends State<ChatPage> {
 
   final _input = TextEditingController();
 
+  /// 正在「编辑后重发」的那条消息在 _msgs 里的下标；发出去时从它开始截断。
+  int? _editAt;
+
   /// 本轮待发送的附件（容器内路径）。发出去就清空，避免下一句又被带上。
   final List<String> _pending = <String>[];
   final _scroll = ScrollController();
@@ -427,6 +430,15 @@ class _ChatPageState extends State<ChatPage> {
     // 只发附件、不写字也算一条：手机上「发张图问问」不该逼人再补一句。
     if ((typed.isEmpty && _pending.isEmpty) || cfg == null || _busy) return;
     final text = _compose(typed);
+    // 编辑后重发：把这条及之后的消息全丢掉，等于在同一分支上改口，而不是叠一句新的。
+    final at = _editAt;
+    if (at != null) {
+      _editAt = null;
+      setState(() {
+        if (at < _msgs.length) _msgs.removeRange(at, _msgs.length);
+      });
+      _persist();
+    }
     // 图片单独记一份：_pending 发完就清空了，而这一轮要拿它决定
     // ①content 里塞不塞 image_url ②要不要开 vision 降级通道
     final images = _pending.where(isImagePath).toList(growable: false);
@@ -691,6 +703,86 @@ class _ChatPageState extends State<ChatPage> {
     return ok ?? false;
   }
 
+
+  /// 一条消息能做什么：复制、编辑后重发（只限自己发的）、从这里开分支。
+  /// 长按被 SelectableText 的选区手势吃掉，所以再给个明确的三点入口——
+  /// 手机上「找不到复制」比多一个按钮更烦。
+  void _messageMenu(int i) {
+    final m = _msgs[i];
+    final mine = m.role == 'user';
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheet) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            leading: const Icon(Icons.copy_all_outlined),
+            title: const Text('复制'),
+            onTap: () async {
+              await Clipboard.setData(ClipboardData(text: m.text));
+              if (!mounted) return;
+              Navigator.pop(sheet);
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('已复制'), duration: Duration(seconds: 1)));
+            },
+          ),
+          if (mine)
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('编辑后重发'),
+              subtitle: const Text('从这条开始改，后面的回答会重新生成'),
+              onTap: () {
+                Navigator.pop(sheet);
+                setState(() {
+                  _editAt = i;
+                  _msgs.removeAt(i);
+                });
+                _input.text = m.text;
+                _input.selection = TextSelection.collapsed(offset: m.text.length);
+                _persist();
+              },
+            ),
+          ListTile(
+            leading: const Icon(Icons.call_split),
+            title: const Text('从这里开分支'),
+            subtitle: const Text('带走这条及之前的全部记录，后面互不影响'),
+            onTap: () {
+              Navigator.pop(sheet);
+              _branchAt(i);
+            },
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// 开分支：新会话复制 [0..i] 的记录，原会话一点不动。
+  Future<void> _branchAt(int i) async {
+    final store = _store;
+    if (store == null) return;
+    final cut = (_msgs.length - 1 < i) ? _msgs.length - 1 : i;
+    final head = _msgs[0].text.replaceAll('\n', ' ').trim();
+    final title = head.isEmpty
+        ? '分支'
+        : (head.length > 16 ? '${head.substring(0, 16)}… · 分支' : '$head · 分支');
+    final s = await store.create(title);
+    s.messages.addAll(_msgs
+        .take(cut + 1)
+        .map((m) => <String, dynamic>{'role': m.role, 'content': m.text}));
+    await store.save(s);
+    if (!mounted) return;
+    setState(() {
+      _session = s;
+      _msgs
+        ..clear()
+        ..addAll(s.messages.map((m) => _Msg('${m['role']}', '${m['content'] ?? ''}')));
+      _err = null;
+      _sessions = [s, ..._sessions.where((e) => e.id != s.id)];
+    });
+    _toBottom();
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已开分支，原会话保留'), duration: Duration(seconds: 2)));
+  }
 
   /// 点缩略图看原图：双指缩放，点空白关掉。
   void _previewImage(String path) {
@@ -1521,6 +1613,20 @@ tags: debian, alpine, toolchain
                                       m.text.isEmpty ? '…' : m.text,
                                       style: const TextStyle(fontSize: 13, height: 1.4),
                                     ),
+                                  // 复制/编辑重发/开分支的入口：长按会被选区手势吃掉，
+                                  // 所以挂一个一眼能看见的三点，点一下出菜单。
+                                  Align(
+                                    alignment: Alignment.bottomRight,
+                                    child: InkWell(
+                                      onTap: () => _messageMenu(i),
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: const Padding(
+                                        padding: EdgeInsets.only(top: 2, left: 8),
+                                        child: Icon(Icons.more_horiz,
+                                            size: 14, color: Color(0xFF7C879C)),
+                                      ),
+                                    ),
+                                  ),
                                 ],
                               ),
                       ),
