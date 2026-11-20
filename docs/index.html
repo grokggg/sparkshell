@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SparkShell v3.8.1 下载</title>
+<title>SparkShell v3.8.2 下载</title>
 <style>
   :root{
     --bg:#0b0f14; --card:#131a22; --card2:#0f151c; --line:#22303d;
@@ -61,22 +61,22 @@
 
   <header>
     <h1>SparkShell</h1>
-    <span class="tag">v3.8.1</span>
+    <span class="tag">v3.8.2</span>
   </header>
   <p class="sub">发布 2026-11-20 21:12 UTC · 仅 arm64 · 自签包名 <code>com.grokggg.sparkshell</code> · 侧载安装</p>
 
   <div class="card">
     <h2>app-alpine.apk <span class="badge">轻 · 62.5 MB</span> <span class="badge full">Alpine</span></h2>
-    <p class="meta" style="margin-top:-4px"><b>3.8.1 改了什么：</b>模型不再「填一个顶掉上一个」——设置里是模型列表，添加只追加、可固定、可设为当前；Chat 顶部选择器分「已固定 / 最近 / 从接入点拉取」三段。</p>
+    <p class="meta" style="margin-top:-4px"><b>3.8.2 改了什么：</b>模型不再「填一个顶掉上一个」——设置里是模型列表，添加即固定、可取消固定、可设为当前；Chat 顶部选择器分「已固定 / 最近 / 从接入点拉取」三段。</p>
     <p class="meta">62,565,808 B · 秒级冷启动，装完即用；系统工具链需 <code>apk add</code></p>
-    <div class="sha" id="sha-a">sha256 b8a4103e9b2acc2a97ef0dbb6af72a729f4a0cd09908ba0bdcf776fae99b1da3</div>
+    <div class="sha" id="sha-a">sha256 cfd40380457b7b71911bddb4c2cfeaf045e06569ab707d317cd5b32497019786</div>
     <div id="links-a"></div>
   </div>
 
   <div class="card">
     <h2>app-debian.apk <span class="badge">全 · 179 MB</span> <span class="badge full">Debian bookworm</span></h2>
-    <p class="meta">179,283,676 B · apt / python3 / node / gcc 齐全，glibc 兼容最好</p>
-    <div class="sha" id="sha-d">sha256 dddc59240ebf317c464c74e60917e5dd42a32823c580a842a7f54523304b7d7d</div>
+    <p class="meta">179,283,636 B · apt / python3 / node / gcc 齐全，glibc 兼容最好</p>
+    <div class="sha" id="sha-d">sha256 e4bc9d3957e5417139dcdd1c73322b7827453220f8e813832f8250ff5e01ee6a</div>
     <div id="links-d"></div>
   </div>
 
@@ -102,13 +102,13 @@ sha256sum app-alpine.apk</pre>
       <div class="kv"><span>targetSdk</span><b>28（proot 必需）</b></div>
       <div class="kv"><span>覆盖安装</span><b>同签名即可</b></div>
     </div>
-    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.8.1 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
+    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.8.2 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
     <p class="tips"><b>应用内更新：</b>走的是 <code>latest.json</code> + 6 路 Range 下载 + sha256 校验。隧道域名一变，应用内更新就失效 —— 这时候用本页链接手动装一次即可，数据不会丢（会话、记忆、容器都在私有目录里）。</p>
   </div>
 
   <footer>
     直链归 GitHub Releases，镜像只是前缀转发；任一镜像 404 就换下一个。<br>
-    Release 页：<span class="url" style="display:inline">https://github.com/grokggg/sparkshell/releases/tag/v3.8.1-apk</span>
+    Release 页：<span class="url" style="display:inline">https://github.com/grokggg/sparkshell/releases/tag/v3.8.2-apk</span>
   </footer>
 </div>
 
@@ -116,7 +116,7 @@ sha256sum app-alpine.apk</pre>
 
 <script>
 const REPO = "grokggg/sparkshell";
-const TAG  = "v3.8.1-apk";
+const TAG  = "v3.8.2-apk";
 const MIRRORS = [
   ["GitHub 直链", ""],
   ["ghfast.top",  "https://ghfast.top/"],
