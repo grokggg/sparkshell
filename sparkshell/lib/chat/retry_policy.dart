@@ -146,18 +146,17 @@ class RetryPolicy {
 
 /// 重试中的进度提示，例：'连接不稳定，正在重试 2/5…'
 String progressText(int attempt, int maxAttempts, {String? reason, int? delayMs}) {
+  // maxAttempts < 1 表示「不设上限」：文案里就不写分母，免得出现「13/12」这种鬼话。
+  final unlimited = maxAttempts < 1;
   final max = maxAttempts < 1 ? 1 : maxAttempts;
   var a = attempt < 1 ? 1 : attempt;
-  if (a > max) a = max;
+  if (!unlimited && a > max) a = max;
+  final n = unlimited ? '第 $a 次' : '$a/$max';
   final secs = delayMs == null ? null : (delayMs / 1000).round();
   if (reason == 'rate_limit') {
-    return secs == null
-        ? '限流了，正在退避重试 $a/$max…'
-        : '限流（429）：等 $secs 秒再发（$a/$max）';
+    return secs == null ? '限流了，正在退避重试 $n…' : '限流（429）：等 $secs 秒再发，$n';
   }
-  return secs == null
-      ? '连接不稳定，正在重试 $a/$max…'
-      : '连接不稳定：等 $secs 秒重试（$a/$max）';
+  return secs == null ? '连接不稳定，正在重试 $n…' : '连接不稳定：等 $secs 秒重试，$n';
 }
 
 /// 把 catch 到的异常转成 [RetryPolicy.judge] 需要的 networkError 文案。

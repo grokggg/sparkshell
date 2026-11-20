@@ -140,7 +140,9 @@ class LlmClient {
     final c = cancel;
     if (c != null) unawaited(c.whenCancelled.then((_) => _abort()));
 
-    for (var attempt = 1; attempt <= _policy.maxAttempts; attempt++) {
+    // 不设上限：免费额度模型的限流往往要等几分钟，逼用户点「继续」等于让他守着屏幕。
+    // 退避封顶 120 秒，一直重试到成功；唯一的出口是用户点停止，或错误本身不可重试（401/403/400）。
+    for (var attempt = 1; ; attempt++) {
       // 取消优先：已经停了就一次请求都别再发
       if (c != null && c.isCancelled) {
         _abort();
@@ -186,13 +188,9 @@ class LlmClient {
         rethrow;
       }
 
-      // 限流不再交回界面：免费额度窗口常常几十秒到两分钟就恢复，
-      // 让用户点「继续」纯属折磨。限流一路退避重试到 maxAttempts（12 次、
-      // 合计约 10 分钟），中途恢复就自动接着跑，工具调用也照常继续。
-      // 非限流的失败仍然 5 次就停：那多半是配置问题，等下去没意义。
-      if (reason != 'rate_limit' && attempt >= 5) break;
-
-      if (attempt < _policy.maxAttempts) {
+      // 不可重试的错误（Key 错、模型名错、参数非法）在上面就已经 throw 了，
+      // 能走到这里的只有限流 / 网络 / 5xx / 超时 —— 这些一律继续等，不交回用户。
+      {
         // 退避之前先看一眼：用户可能刚好在这一刻点了停止，
         // 不然这次 delay 完还要再发一次请求才轮到检查。
         if (c != null && c.isCancelled) {
@@ -201,7 +199,7 @@ class LlmClient {
         }
         final wait = _policy.delayFor(attempt, reason);
         onRetry?.call(
-            progressText(attempt + 1, _policy.maxAttempts, reason: reason, delayMs: wait));
+            progressText(attempt + 1, 0, reason: reason, delayMs: wait));
         await _sleep(wait, c);
         if (c != null && c.isCancelled) {
           _abort();

@@ -215,7 +215,17 @@ class AgentRunner {
     );
     onStatus?.call(null);
     try {
-      for (var step = 0; step < maxSteps; step++) {
+      // 不在 40 步就停：装环境、找依赖这种活本来就长，停一次就要用户点一次
+      // 「继续」，等于把等待转嫁给他。这里改成跑到底，400 步只是防死循环的保险。
+      var step = 0;
+      var stalls = 0;
+      String? lastSig;
+      while (true) {
+        step++;
+        if (step > maxSteps * 10) {
+          onText('（已连跑 $step 步还没收尾，我先停下。发「继续」我接着跑，已完成的部分不会重来）');
+          return;
+        }
         // 每步开头先看取消：上一步工具刚跑完那一刻点的停止，不该再多发一轮请求
         if (_stopRequested()) return;
 
@@ -224,6 +234,24 @@ class AgentRunner {
         final msg = await client.complete(messages, tools: Tools.specs, cancel: cancel);
         final raw = (msg['content'] as String?) ?? '';
         final calls = msg['tool_calls'] as List?;
+        // 卡住判定：模型自己打转时（同一个命令连着发 3 次、结果没变化），
+        // 无限跑下去只会烧额度，这时停下来比硬撑更有用。
+        final sig = calls == null || calls.isEmpty
+            ? null
+            : calls
+                .map((c) => '${(c as Map)['function']?['name']}'
+                    '${(c as Map)['function']?['arguments']}')
+                .join('|');
+        if (sig != null && sig == lastSig) {
+          stalls++;
+        } else {
+          stalls = 0;
+        }
+        lastSig = sig;
+        if (stalls >= 3) {
+          onText('（同一个命令连跑 ${stalls + 1} 次都没有新结果，像是卡住了。我停下，你看一眼再让我继续）');
+          return;
+        }
         final noNative = calls == null || calls.isEmpty;
         // 文本协议：模型不支持 function calling 时的兜底通道
         final t = noNative ? _parseTextTool(raw) : null;
@@ -296,7 +324,7 @@ class AgentRunner {
           messages.add({'role': 'tool', 'tool_call_id': c['id'], 'content': out});
         }
       }
-      onText('（已连跑 $maxSteps 步，先停下。发「继续」我接着跑，已完成的步骤不会重来）');
+      // 正常不会走到这里：while(true) 只从「模型给最终答复」或上面的保险退出。
     } catch (e) {
       // 停止之后冒出来的任何异常（被掐断的 socket、工具被中断）都当「正常停止」处理：
       // 写一条提示就安静退出，不再往上层抛，避免界面弹红色「连不上模型服务」
