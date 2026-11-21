@@ -35,6 +35,56 @@ class LinuxEnv {
   void attachRootfs(String path) => _rootfs = path;
 
   Future<String?> ensureReady(void Function(String) log) async {
+    // 单飞：Linux 页、文件页、Chat、远程页都会调进来，之前没有这道闸，
+    // 一次冷启动能并发跑两三个解包，Java 侧互相 deleteTree 对方目录 →
+    // tar 报 "xgetcwd / bad symlink / rootfs.tar 不存在"，看着像解压坏了。
+    final running = _inflight;
+    if (running != null) {
+      log('rootfs 准备中，复用正在进行的那一次…');
+      return running;
+    }
+    final fut = _ensureReadyOnce(log);
+    _inflight = fut;
+    try {
+      return await fut;
+    } finally {
+      if (identical(_inflight, fut)) _inflight = null;
+    }
+  }
+
+  Future<String?>? _inflight;
+  String? _lastFail;
+
+  /// 失败一次后：如果是「解包留下半成品」这类，清干净再试一次。
+  /// 只在这几种情况下重试 —— 空间不足 / busy / 权限问题重试也只是白跑。
+  Future<String?> _ensureReadyOnce(void Function(String) log) async {
+    var script = await _ensureReadyInner(log);
+    if (script != null) return script;
+    final fail = _lastFail ?? '';
+    final retriable = fail.contains('解包不完整') ||
+        fail.contains('rename 失败') ||
+        fail.contains('bad symlink') ||
+        fail.contains('No such file');
+    if (!retriable) return null;
+    log('清掉半成品 rootfs，重试一次…');
+    await _wipeBrokenRootfs(log);
+    return _ensureReadyInner(log);
+  }
+
+  Future<void> _wipeBrokenRootfs(void Function(String) log) async {
+    final files = await _filesDir();
+    if (files == null) return;
+    for (final n in ['rootfs', 'rootfs.tmp', 'rootfs.tar']) {
+      final f = File('$files/$n');
+      try {
+        if (await f.exists()) await f.delete(recursive: true);
+      } catch (e) {
+        log('清 $n 失败：$e');
+      }
+    }
+  }
+
+  Future<String?> _ensureReadyInner(void Function(String) log) async {
     final files = await _filesDir();
     if (files == null) {
       log('拿不到私有目录');
@@ -69,6 +119,7 @@ class LinuxEnv {
       log('解压 Debian rootfs（首次约 1-3 分钟，请勿退出）…');
       final res = await _ch.invokeMethod<String>('prepareRootfs');
       if (res != 'ok') {
+        _lastFail = res ?? '';
         log('rootfs 解压失败 → $res');
         return null;
       }

@@ -592,15 +592,44 @@ public class MainActivity extends FlutterActivity {
         }
     }
 
+    /** rootfs 解包是全局唯一资源：同一时刻只准一个在跑，否则两个 tar 会互相删对方的 cwd。 */
+    private static final Object ROOTFS_LOCK = new Object();
+    private static volatile boolean sExtracting = false;
+
     /** @return "ok" 或诊断信息 */
     private String extractRootfs() throws Exception {
+        synchronized (ROOTFS_LOCK) {
+            if (sExtracting) {
+                // 3.8.4 及以前没有这道闸：Linux 页 + 文件页（+ Chat / 远程）会同时发起解包，
+                // 各自 deleteTree(rootfs) 把对方的 cwd 删掉，于是 tar 报
+                //   "tar: ... rootfs.tar: No such file or directory"
+                //   "tar: xgetcwd: No such file or directory"  "tar: './bin' bad symlink"
+                // 表现就是「准备失败」反复出现，且 剩余××MB 数字忽大忽小。
+                return "busy: 上一次解包还在进行，等它结束（进度看日志）";
+            }
+            sExtracting = true;
+            try {
+                return extractRootfsLocked();
+            } finally {
+                sExtracting = false;
+            }
+        }
+    }
+
+    /**
+     * 真正的解包：先解到 rootfs.tmp，校验出 shell 后才原子换成 rootfs。
+     * 老实现直接往 rootfs 里解，一旦中断就留下半个系统；下次再解又在旧的上面叠，
+     * 加上并发就必然烂掉。临时目录 + rename 这一步是「要么完整，要么原样」的底线。
+     */
+    private String extractRootfsLocked() throws Exception {
         File files = getApplicationContext().getFilesDir();
         File rootfs = new File(files, "rootfs");
         File marker = new File(rootfs, ".sparkshell_ready");
         if (marker.exists() && hasShell(rootfs)) return "ok";
 
-        deleteTree(rootfs);
-        if (!rootfs.mkdirs() && !rootfs.isDirectory()) return "无法创建 " + rootfs;
+        File tmp = new File(files, "rootfs.tmp");
+        deleteTree(tmp);
+        if (!tmp.mkdirs() && !tmp.isDirectory()) return "无法创建 " + tmp;
 
         File tar = new File(files, "rootfs.tar");
         long mb = 1024L * 1024L;
@@ -613,11 +642,12 @@ public class MainActivity extends FlutterActivity {
         long freeBefore = files.getUsableSpace() / mb;
         if (freeBefore < tar.length() / mb + 100) {
             tar.delete();
+            deleteTree(tmp);
             return "空间不足: 剩余 " + freeBefore + "MB，需要约 " + (tar.length() / mb + 120) + "MB";
         }
 
         Process p = new ProcessBuilder("/system/bin/toybox", "tar", "-xf",
-                tar.getAbsolutePath(), "-C", rootfs.getAbsolutePath())
+                tar.getAbsolutePath(), "-C", tmp.getAbsolutePath())
                 .redirectErrorStream(true).start();
         StringBuilder log = new StringBuilder();
         try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
@@ -630,14 +660,23 @@ public class MainActivity extends FlutterActivity {
         int code = p.waitFor();
         tar.delete();
 
-        for (String d : new String[]{"dev", "proc", "sys", "tmp", "root", "home"}) {
-            new File(rootfs, d).mkdirs();
+        if (!hasShell(tmp)) {
+            long freeAfter = files.getUsableSpace() / mb;
+            deleteTree(tmp);
+            return "解包不完整: tar退出码=" + code + " 剩余=" + freeAfter + "MB tar输出=" + log;
         }
 
-        if (!hasShell(rootfs)) {
-            return "解包不完整: tar退出码=" + code + " 剩余=" + (files.getUsableSpace() / mb) + "MB tar输出=" + log;
+        for (String d : new String[]{"dev", "proc", "sys", "tmp", "root", "home"}) {
+            new File(tmp, d).mkdirs();
         }
-        marker.createNewFile();
+        new File(tmp, ".sparkshell_ready").createNewFile();
+
+        // 原子就位：先删旧目录，再 rename。同一分区内 rename 是原子的。
+        deleteTree(rootfs);
+        if (!tmp.renameTo(rootfs)) {
+            // 极少数机型 rename 失败（挂载点/权限）→ 退化成「再解一次到正式目录」，至少不撒谎。
+            return "解包完成但无法就位（rename 失败），请点重试";
+        }
         return "ok";
     }
 
