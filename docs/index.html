@@ -102,7 +102,7 @@ sha256sum app-alpine.apk</pre>
       <div class="kv"><span>targetSdk</span><b>28（proot 必需）</b></div>
       <div class="kv"><span>覆盖安装</span><b>同签名即可</b></div>
     </div>
-    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.8.3 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
+    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.8.4 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
     <p class="tips"><b>应用内更新：</b>走的是 <code>latest.json</code> + 6 路 Range 下载 + sha256 校验。隧道域名一变，应用内更新就失效 —— 这时候用本页链接手动装一次即可，数据不会丢（会话、记忆、容器都在私有目录里）。</p>
   </div>
 
