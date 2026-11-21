@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'model_vault.dart';
+import 'api_endpoint.dart';
 
 /// 模型接入配置：OpenAI 兼容（DeepSeek / 通义 / Kimi / 本地 Ollama / vLLM 都能用）。
 ///
@@ -162,6 +163,120 @@ class ApiConfig {
   /// 主接入点 5xx / 连不上时，自动切到下一个，并把能用的那个转正。
   final List<Map<String, String>> backups = [];
 
+  /// 接入点清单：每个 key 一条，各自带自己的模型档案。
+  ///
+  /// 3.8.3 只有一个 baseUrl/apiKey 字段 —— 用户填第二个 key 时整份配置被顶掉，
+  /// 旧 key 的模型虽然还在 vault 里（按 baseUrl 分组），界面只按当前地址过滤，
+  /// 看起来就是「原来那个 key 的模型没了」。用户原话：
+  /// 「我就一个七牛云 key……我另一个 key 的模型就没了，不能这样。」
+  /// 所以接入点改成清单，切换只换指针，谁都不覆盖谁。
+  final List<ApiEndpoint> endpoints = [];
+
+  /// 当前生效的接入点 id（= [ApiEndpoint.normalize] 后的 baseUrl）。
+  String activeEndpointId = '';
+
+  /// 当前生效的那条接入点。
+  ApiEndpoint? get activeEndpoint {
+    for (final e in endpoints) {
+      if (e.id == activeEndpointId) return e;
+    }
+    return null;
+  }
+
+  /// 草稿（current baseUrl）对应的接入点，没建档就返回 null。
+  ApiEndpoint? get currentEndpoint {
+    final id = ApiEndpoint.normalize(baseUrl);
+    for (final e in endpoints) {
+      if (e.id == id) return e;
+    }
+    return null;
+  }
+
+  /// 把当前 baseUrl/apiKey/model 落成一条接入点：同地址只更新，不新增。
+  ///
+  /// 设置页「填 key → 拉模型」的流程走这里建档，所以第二个 key 一定是**新增**一条，
+  /// 不是把第一条改掉。返回 null 表示地址还没填。
+  ApiEndpoint? ensureEndpoint({String? name}) {
+    final url = baseUrl.trim();
+    if (url.isEmpty) return null;
+    final id = ApiEndpoint.normalize(url);
+    ApiEndpoint? hit;
+    for (final e in endpoints) {
+      if (e.id == id) {
+        hit = e;
+        break;
+      }
+    }
+    if (hit == null) {
+      hit = ApiEndpoint(id: id, name: (name ?? '').trim(), baseUrl: url, apiKey: apiKey.trim());
+      endpoints.add(hit);
+    } else {
+      hit.baseUrl = url;
+      hit.apiKey = apiKey.trim();
+      final n = (name ?? '').trim();
+      if (n.isNotEmpty) hit.name = n;
+    }
+    hit.model = model;
+    hit.lastUsedAt = DateTime.now().millisecondsSinceEpoch;
+    activeEndpointId = id;
+    return hit;
+  }
+
+  /// 切换当前接入点：换 baseUrl/apiKey，并把这个接入点上次用的模型恢复回来。
+  /// 只改内存，写盘由调用方决定（设置页底部「保存」）。
+  bool useEndpoint(String id) {
+    ApiEndpoint? hit;
+    for (final e in endpoints) {
+      if (e.id == id) {
+        hit = e;
+        break;
+      }
+    }
+    if (hit == null) return false;
+    baseUrl = hit.baseUrl;
+    apiKey = hit.apiKey;
+    if (hit.model.trim().isNotEmpty) model = hit.model.trim();
+    hit.lastUsedAt = DateTime.now().millisecondsSinceEpoch;
+    activeEndpointId = hit.id;
+    return true;
+  }
+
+  void renameEndpoint(String id, String name) {
+    for (final e in endpoints) {
+      if (e.id == id) e.name = name.trim();
+    }
+  }
+
+  /// 删掉一个接入点：只清它名下的模型，别的接入点一条都不动。
+  void removeEndpoint(String id) {
+    endpoints.removeWhere((e) => e.id == id);
+    for (final e in List<ModelEntry>.from(vault.entries)) {
+      if (ApiEndpoint.normalize(e.baseUrl) == id) vault.remove(e.id, baseUrl: e.baseUrl);
+    }
+    // 别让兼容层把刚删掉的名字从旧字段吸回来。
+    models.removeWhere((n) => vault.entries.every((v) => v.id != n.trim()));
+    // 指针必须一起挪走：否则紧接着的 save() 会调 ensureEndpoint()，
+    // 看到 baseUrl 还停在刚删的地址上，立刻又把这条接入点重建出来（表现是「删不掉」）。
+    if (activeEndpointId == id) {
+      if (endpoints.isNotEmpty) {
+        useEndpoint(endpoints.first.id);
+      } else {
+        activeEndpointId = '';
+        baseUrl = '';
+        apiKey = '';
+        model = '';
+      }
+    }
+    _afterVaultChange();
+  }
+
+  /// 某个接入点下已存档的模型数量（设置页的接入点开关上显示）。
+  int modelCountOf(String id) {
+    if (id.isEmpty) return vault.entries.length;
+    return vault.forEndpoint(id).length;
+  }
+
+
   /// 配置落盘目录，rotate() 内部要写盘，所以自己记着。
   String filesDir = '';
 
@@ -252,6 +367,23 @@ class ApiConfig {
           }
         }
       }
+      // 接入点清单（3.8.4 起）。老配置里没有这一段，靠下面的 ensureEndpoint 补建。
+      final eps = m['endpoints'];
+      if (eps is List) {
+        for (final e in eps) {
+          if (e is Map) {
+            cfg.endpoints.add(ApiEndpoint.fromJson(e.cast<String, dynamic>()));
+          }
+        }
+      }
+      cfg.activeEndpointId = '${m['activeEndpointId'] ?? ''}'.trim();
+      // 顶层 baseUrl/apiKey 就是「当前生效」那一套：同步进清单，缺条目就建一条
+      // （升级路径：老用户第一次打开就有第一条接入点，之后再加 key 才是新增）。
+      if (cfg.baseUrl.trim().isNotEmpty) {
+        cfg.ensureEndpoint();
+      } else if (cfg.endpoints.isNotEmpty) {
+        cfg.useEndpoint(cfg.endpoints.first.id);
+      }
       return cfg;
     } catch (_) {
       return ApiConfig();
@@ -264,6 +396,9 @@ class ApiConfig {
     // 落盘前并进 vault，保证档案库不落后。
     thinkingSupport.forEach(vault.annotate);
     _syncLegacyModels();
+    // 落盘前把「当前生效的 baseUrl/apiKey/model」同步进接入点清单，
+    // 保证用户刚填的新 key 一定有一条自己的档案，而不是覆盖上一条。
+    if (baseUrl.trim().isNotEmpty) ensureEndpoint();
     await f.writeAsString(jsonEncode({
       'baseUrl': baseUrl,
       'apiKey': apiKey,
@@ -277,6 +412,8 @@ class ApiConfig {
       'models': models,
       'thinking': thinkingSupport,
       'backups': backups,
+      'endpoints': [for (final e in endpoints) e.toJson()],
+      'activeEndpointId': activeEndpointId,
     }), flush: true);
     this.filesDir = filesDir;
     if (Platform.isAndroid) {

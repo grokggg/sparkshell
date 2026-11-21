@@ -19,6 +19,7 @@ import '../term/terminal_bus.dart';
 import 'tool_card.dart';
 import 'tool_row.dart';
 import 'api_config.dart';
+import 'api_endpoint.dart';
 import 'context_builder.dart';
 import '../memory/memory_store.dart';
 import '../plugins/plugin_store.dart';
@@ -928,7 +929,10 @@ class _ChatPageState extends State<ChatPage> {
   ///   1. 已固定 —— 用户主动钉住的，永远在，不会被拉取结果冲掉；
   ///   2. 最近用过 —— 真正用过的（lastUsedAt > 0），按时间倒序，最多 12 条；
   ///      末尾再补几条手填过但还没用过的，免得设置页填的模型在这里没有位置；
-  ///   3. 接入点拉取 —— 只是候选展示，点右侧「固定」才入库，不入库就不占位置。
+  ///   3. 接入点拉取 —— 只是候选展示，点右侧「固定」才入库，不入库就不占位置；
+  ///   4. 其他接入点 —— 别的 key 名下存过的模型（固定优先 + 最近用过），
+  ///      点一条就切到那个 key 并用它，不用先去设置页换 key 再回来找。
+  ///      只有一个接入点时这一段整段不出现（那就没有「其他」可言）。
   /// 当前选中的模型一定在列表最前面出现：它若已属于某一段就提到该段首位，
   /// 三段都不属于时单开一条「当前使用」顶在最上面，绝不隐身。
   Future<void> _modelSheet() async {
@@ -1172,6 +1176,118 @@ class _ChatPageState extends State<ChatPage> {
         } else {
           for (final id in candShown) {
             rows.add(tile(id, action: pinText(id)));
+          }
+        }
+
+        // 4) 其他接入点：别的 key 名下的模型，不用先去设置页换 key 再回来找。
+        // 只留 id != 当前接入点的；只有一个 key 时这一段整段不出现，不留空白。
+        // activeEndpointId 理论上总被 save() 的 ensureEndpoint 填好，这里仍留个兜底：
+        // 空值时按当前 baseUrl 反查，免得把「正在用的这个」也列成「其他」。
+        final activeId = cfg.activeEndpointId.trim().isNotEmpty
+            ? cfg.activeEndpointId
+            : (cfg.currentEndpoint?.id ?? '');
+        final others = <ApiEndpoint>[
+          for (final ep in cfg.endpoints)
+            if (ep.id != activeId) ep,
+        ];
+        if (others.isNotEmpty) {
+          // 分组标题：key 的名字 + 它名下的模型数，比上面三段的段标题低半级。
+          Widget groupTitle(ApiEndpoint ep, int n) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 4, 0),
+              child: Row(children: [
+                const Icon(Icons.key_outlined,
+                    size: 12, color: Color(0xFF5C6A82)),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(ep.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF8FA0BC))),
+                ),
+                const SizedBox(width: 6),
+                Text('$n 个模型',
+                    style: const TextStyle(
+                        fontSize: 10.5, color: Color(0xFF5C6A82))),
+              ]),
+            );
+          }
+
+          // 其他接入点的一行：点它就是「切 key + 换模型 + 记一次使用 + 落盘 + 关弹层」。
+          // 不复用上面的 tile()：那个只改本次弹层的选中项，不切接入点。
+          Widget otherTile(ApiEndpoint ep, String id) {
+            return ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.only(left: 12, right: 4),
+              horizontalTitleGap: 6,
+              minLeadingWidth: 16,
+              leading: const Icon(Icons.circle_outlined,
+                  size: 13, color: Color(0xFF39445A)),
+              title: Text(id,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 12.5, color: Color(0xFFB9C6DC))),
+              onTap: () async {
+                // 顺序要紧：先切接入点（换 baseUrl/apiKey），再写 model。
+                // 反过来的话 save() 里的 ensureEndpoint 会把这个模型记到旧接入点上，
+                // 于是「另一个 key 的模型」又被搬到当前 key 名下 —— 正是要修的那个毛病。
+                if (!cfg.useEndpoint(ep.id)) return;
+                cfg.model = id;
+                ep.model = id; // 下次切回这个 key 时 useEndpoint 能把模型一起恢复
+                // 这里传原始 baseUrl 而不是 id：档案库按「用户填的地址原文」分组，
+                // 传规范化后的 id 在带结尾斜杠时会认不回来，白白多建一条通用档。
+                cfg.vault.markUsed(id, baseUrl: ep.baseUrl);
+                if (dir != null) await cfg.save(dir);
+                if (mounted) setState(() {});
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+            );
+          }
+
+          // 超出 5 条只报个数，不可点：这里不放「展开」，免得弹层长到要滚半天。
+          Widget moreLine(int n) => Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 4, 2),
+                child: Text('还有 $n 个',
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF5C6A82))),
+              );
+
+          rows.add(header('其他接入点',
+              note: '${others.length} 个 key，点模型直接切过去'));
+          for (final ep in others) {
+            // 只取真正属于这个接入点的条目：通用档（baseUrl 为空）在每个 key 下都算，
+            // 全列一遍会让同一串模型在每个分组里重复出现。
+            // 用 normalize 比较而不是 forEndpoint：档案里存的是原始 baseUrl，
+            // 可能带结尾斜杠，直接等值比会漏掉自己的模型。
+            final own = cfg.vault.entries
+                .where((e) =>
+                    e.baseUrl.isNotEmpty &&
+                    ApiEndpoint.normalize(e.baseUrl) == ep.id)
+                .toList();
+            // 与档案库一致的排序：固定优先，再按最近使用，最后按建档时间。
+            own.sort((a, b) {
+              if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+              final u = b.lastUsedAt.compareTo(a.lastUsedAt);
+              return u != 0 ? u : b.addedAt.compareTo(a.addedAt);
+            });
+            final names = <String>[];
+            for (final e in own) {
+              if (!names.contains(e.id)) names.add(e.id);
+            }
+            final shown = names.take(5).toList();
+            rows.add(groupTitle(ep, names.length));
+            if (shown.isEmpty) {
+              rows.add(emptyLine('这个 key 名下还没存过模型；在设置页填一次它的 key 就会进来。'));
+            } else {
+              for (final id in shown) {
+                rows.add(otherTile(ep, id));
+              }
+              if (names.length > shown.length) {
+                rows.add(moreLine(names.length - shown.length));
+              }
+            }
           }
         }
 

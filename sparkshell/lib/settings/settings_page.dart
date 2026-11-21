@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import 'package:sparkshell/app_version.dart';
 import 'package:sparkshell/chat/api_config.dart';
+import 'package:sparkshell/chat/api_endpoint.dart';
 import 'package:sparkshell/chat/llm_client.dart';
 import 'package:sparkshell/chat/model_vault.dart';
 import 'package:sparkshell/memory/memory_store.dart';
@@ -72,6 +73,13 @@ class _SettingsPageState extends State<SettingsPage>
 
   /// 「添加模型」那一行的输入框（只在内存里，回车/点添加后清空）。
   final _newModel = TextEditingController();
+
+  /// 「＋ 接入点」新建态：三个输入框是空的、还没落成清单里的一条，
+  /// 保存 / 添加模型时才建档（同地址只更新，新地址一定新增）。
+  bool _newEndpoint = false;
+
+  /// 新建接入点的名字（可留空，留空由 [ApiEndpoint.label] 回落到域名）。
+  final _endpointName = TextEditingController();
   double _temp = 0.3;
   String _reasoning = 'auto';
   bool _obscure = true;
@@ -121,6 +129,7 @@ class _SettingsPageState extends State<SettingsPage>
     _vision.dispose();
     _sys.dispose();
     _newModel.dispose();
+    _endpointName.dispose();
     _factText.dispose();
     super.dispose();
   }
@@ -176,6 +185,8 @@ class _SettingsPageState extends State<SettingsPage>
       ..reasoning = _reasoning
       ..systemPrompt = _sys.text
       ..temperature = _temp;
+    // 接入点清单跟着走：同地址只更新这一条，新地址才新增一条，谁都不覆盖谁。
+    cfg.ensureEndpoint(name: _endpointName.text);
     cfg.rememberModel(cfg.model);
     try {
       await cfg.save(widget.cfgPath);
@@ -183,6 +194,9 @@ class _SettingsPageState extends State<SettingsPage>
       setState(() {
         _saving = false;
         _dirty = false;
+        // 新建态到这儿就算落地了，名字清掉以免贴到下一条上。
+        _newEndpoint = false;
+        _endpointName.clear();
       });
       widget.onChanged?.call();
       _snack('已保存');
@@ -900,7 +914,10 @@ class _SettingsPageState extends State<SettingsPage>
   /// 当前接入点。以「接口地址」草稿为准：用户改了地址，列表立刻切到那个接入点。
   String _endpoint() {
     final t = _base.text.trim();
-    return t.isEmpty ? (_cfg?.baseUrl.trim() ?? '') : t;
+    if (t.isNotEmpty) return t;
+    // 新建态还没填地址：不归属任何接入点，别把上一条的模型显示成「这条的」。
+    if (_newEndpoint) return '';
+    return _cfg?.baseUrl.trim() ?? '';
   }
 
   /// 当前接入点下已保存的模型：固定的在前，其次按最近使用，再其次按添加时间。
@@ -911,6 +928,8 @@ class _SettingsPageState extends State<SettingsPage>
   List<ModelEntry> _savedModels() {
     final cfg = _cfg;
     if (cfg == null) return const <ModelEntry>[];
+    // 新建态且地址还空着：留空，别把上一条接入点的模型误当成新的。
+    if (_newEndpoint && _endpoint().isEmpty) return const <ModelEntry>[];
     final list = cfg.vault.forEndpoint(_endpoint()).toList();
     list.sort((a, b) {
       if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
@@ -922,6 +941,313 @@ class _SettingsPageState extends State<SettingsPage>
     });
     final seen = <String>{};
     return list.where((e) => seen.add(e.id)).toList();
+  }
+
+  // —— 接入点清单：一个 key 一条，切换只换指针，谁都不覆盖谁 ——
+
+  /// 当前接入点的展示名：按草稿地址去清单里找，找不到就退回地址本身。
+  String _currentLabel(ApiConfig cfg) {
+    if (_newEndpoint) return '新建接入点（未保存）';
+    final url = _endpoint();
+    if (url.isEmpty) return '未设置';
+    final id = ApiEndpoint.normalize(url);
+    for (final e in cfg.endpoints) {
+      if (e.id == id) return e.label;
+    }
+    return id;
+  }
+
+  /// 新建态里填的地址撞上已有接入点。接入点 id 就是规范化后的地址，
+  /// 撞了只会「更新那一条」而不是新增 —— 这话得提前说给用户听。
+  ApiEndpoint? get _newUrlCollision {
+    final cfg = _cfg;
+    if (cfg == null || !_newEndpoint) return null;
+    final id = ApiEndpoint.normalize(_base.text);
+    if (id.isEmpty) return null;
+    for (final e in cfg.endpoints) {
+      if (e.id == id) return e;
+    }
+    return null;
+  }
+
+  /// 把三个输入框刷成配置里的值（切接入点、删接入点之后都要）。
+  void _syncDraft(ApiConfig cfg) {
+    _base.text = cfg.baseUrl;
+    _key.text = cfg.apiKey;
+    _model.text = cfg.model;
+  }
+
+  /// 把草稿落回它自己的那条接入点：同地址只更新，新地址才新增。
+  /// 草稿没填全（新建态缺地址或 key）就不建档，免得清单里多一条空壳。
+  void _stashDraft(ApiConfig cfg) {
+    final url = _base.text.trim();
+    if (url.isEmpty) return;
+    if (_newEndpoint && _key.text.trim().isEmpty) return;
+    cfg
+      ..baseUrl = url
+      ..apiKey = _key.text.trim()
+      ..model = _model.text.trim();
+    cfg.ensureEndpoint(name: _endpointName.text);
+  }
+
+  /// 切接入点：先存草稿，再换指针，然后把三个输入框刷成新值。
+  void _switchEndpoint(String id) {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    if (!_newEndpoint && id == cfg.activeEndpointId) return; // 已经在这条上
+    _stashDraft(cfg);
+    if (!cfg.useEndpoint(id)) return;
+    setState(() {
+      _newEndpoint = false;
+      _endpointName.clear();
+      _syncDraft(cfg);
+      _ping = null;
+      _dirty = true; // 指针变了也得落盘，模型归属靠它
+    });
+  }
+
+  /// 「＋ 接入点」：先把手上草稿存好，再清空三个输入框进新建态。
+  void _startNewEndpoint() {
+    final cfg = _cfg;
+    if (cfg == null || _newEndpoint) return;
+    _stashDraft(cfg);
+    setState(() {
+      _newEndpoint = true;
+      _base.clear();
+      _key.clear();
+      _model.clear();
+      _endpointName.clear();
+      _ping = null;
+      _dirty = true;
+    });
+  }
+
+  /// 放弃新建：草稿恢复成当前接入点那一套，清单里不留痕。
+  void _cancelNewEndpoint() {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    setState(() {
+      _newEndpoint = false;
+      _endpointName.clear();
+      _syncDraft(cfg);
+      _ping = null;
+      _dirty = _pendingEdits(cfg);
+    });
+  }
+
+  /// 长按接入点（或点 chip 右侧小点）弹菜单：重命名 / 删除。
+  Future<void> _endpointMenu(ApiEndpoint ep) async {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final act = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Sk.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 6, bottom: 2),
+                child: Text(
+                  ep.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    color: Sk.text,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 6, bottom: 4),
+                child: Text(
+                  '${ep.baseUrl}  ·  ${cfg.modelCountOf(ep.id)} 个模型',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11, color: Sk.dim),
+                ),
+              ),
+              const Divider(height: 12, color: Sk.line),
+              _EndpointMenuRow(
+                icon: Icons.edit_rounded,
+                label: '重命名',
+                onTap: () => Navigator.of(ctx).pop('rename'),
+              ),
+              _EndpointMenuRow(
+                icon: Icons.delete_outline_rounded,
+                label: '删除这个接入点',
+                danger: true,
+                onTap: () => Navigator.of(ctx).pop('delete'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (act == null || !mounted) return; // null = 点外面取消
+    if (act == 'rename') {
+      await _renameEndpoint(ep);
+    } else if (act == 'delete') {
+      await _deleteEndpoint(ep);
+    }
+  }
+
+  /// 重命名：名字只影响 chips 上的展示，地址和 key 一个字都不动。
+  Future<void> _renameEndpoint(ApiEndpoint ep) async {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final ctrl = TextEditingController(text: ep.name.trim());
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Sk.card,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          '重命名接入点',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Sk.text,
+          ),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          cursorColor: Sk.primary,
+          style: const TextStyle(fontSize: 13.5, color: Sk.text),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: ep.label.isEmpty ? '七牛云 / DeepSeek 官方' : ep.label,
+            hintStyle: TextStyle(
+              fontSize: 12.5,
+              color: Sk.dim.withValues(alpha: 0.55),
+            ),
+            filled: true,
+            fillColor: Sk.bg.withValues(alpha: 0.55),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 12,
+            ),
+            border: _inputBorder(Sk.line),
+            enabledBorder: _inputBorder(Sk.line),
+            focusedBorder: _inputBorder(Sk.primary, width: 1.4),
+          ),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消', style: TextStyle(color: Sk.dim)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text),
+            style: FilledButton.styleFrom(
+              backgroundColor: Sk.primary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(9),
+              ),
+            ),
+            child: const Text('保存名字'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (name == null || !mounted) return;
+    cfg.renameEndpoint(ep.id, name);
+    setState(() {});
+    try {
+      await cfg.save(widget.cfgPath);
+      if (!mounted) return;
+      _snack(name.trim().isEmpty ? '名字已清空，改用域名显示' : '已改名为「${ep.label}」');
+    } catch (err) {
+      if (!mounted) return;
+      _snack('名字改了，但写盘失败：$err');
+    }
+  }
+
+  /// 删除接入点：只清它名下的模型；删的是当前这条就切到剩下的第一条。
+  Future<void> _deleteEndpoint(ApiEndpoint ep) async {
+    final cfg = _cfg;
+    if (cfg == null) return;
+    final n = cfg.modelCountOf(ep.id);
+    final ok = await _confirm(
+      title: '删除接入点「${ep.label}」',
+      message: n == 0
+          ? '这条接入点下没有模型，删掉只移除它的 key 和地址。'
+          : '会连同它名下的 $n 个模型档案一起删掉；别的接入点（别的 key）的模型一条都不动。',
+      dangerText: '删除',
+    );
+    if (ok != true || !mounted) return;
+    final wasActive = ep.id == cfg.activeEndpointId;
+    if (wasActive) {
+      // 必须先把指针挪走再删：removeEndpoint 内部会顺手写盘，
+      // 而写盘会 ensureEndpoint()「当前地址」—— 指针还留在被删的那条上，
+      // 它就会立刻被重建成一条空名字的接入点（看起来像删不掉）。
+      final rest = cfg.endpoints.where((x) => x.id != ep.id).toList();
+      if (rest.isEmpty) {
+        // 一条都不剩：连地址一起清，否则写盘同样会把它建回来。
+        cfg
+          ..baseUrl = ''
+          ..apiKey = ''
+          ..model = '';
+      } else {
+        cfg.useEndpoint(rest.first.id);
+      }
+    }
+    cfg.removeEndpoint(ep.id);
+    setState(() {
+      if (wasActive) {
+        // 只在自己真的换了指针时才刷草稿，别把用户没保存的改动冲掉。
+        _newEndpoint = false;
+        _endpointName.clear();
+        _syncDraft(cfg);
+      }
+      _ping = null;
+      _dirty = true;
+    });
+    try {
+      await cfg.save(widget.cfgPath);
+      if (!mounted) return;
+      setState(() => _dirty = _pendingEdits(cfg));
+      widget.onChanged?.call();
+      _snack('已删除接入点「${ep.label}」');
+    } catch (err) {
+      if (!mounted) return;
+      _snack('已删除，但写盘失败：$err');
+    }
+  }
+
+  /// 接入点 chips：一行放不下就换行，末尾永远有「＋ 接入点」。
+  Widget _buildEndpointChips(ApiConfig cfg) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final ep in cfg.endpoints)
+          _EndpointChip(
+            label: ep.label,
+            count: cfg.modelCountOf(ep.id),
+            active: !_newEndpoint && ep.id == cfg.activeEndpointId,
+            onTap: () => _switchEndpoint(ep.id),
+            onMenu: () => _endpointMenu(ep),
+          ),
+        _EndpointChip(
+          label: '＋ 接入点',
+          active: _newEndpoint,
+          onTap: _startNewEndpoint,
+        ),
+      ],
+    );
   }
 
   void _onBaseChanged(String _) {
@@ -979,6 +1305,19 @@ class _SettingsPageState extends State<SettingsPage>
       _snack('先填模型名');
       return;
     }
+    // 新建态先落成一条接入点：否则这个模型会挂到上一条 key 名下。
+    if (_newEndpoint) {
+      final url = _base.text.trim();
+      if (url.isEmpty) {
+        _snack('先填接口地址');
+        return;
+      }
+      cfg
+        ..baseUrl = url
+        ..apiKey = _key.text.trim()
+        ..model = _model.text.trim();
+      cfg.ensureEndpoint(name: _endpointName.text);
+    }
     final endpoint = _endpoint();
     final known = cfg.vault.forEndpoint(endpoint).any((e) => e.id == id);
     final isNew = known ? false : cfg.vault.add(id, baseUrl: endpoint);
@@ -992,6 +1331,8 @@ class _SettingsPageState extends State<SettingsPage>
       _model.text = id; // 当前模型跟着切；列表保留，不清空
       cfg.model = id;
       _newModel.clear();
+      _newEndpoint = false;
+      _endpointName.clear();
     });
     try {
       await cfg.save(widget.cfgPath);
@@ -1115,10 +1456,63 @@ class _SettingsPageState extends State<SettingsPage>
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
       children: [
-        const SkSection('接入点'),
+        SkSection(
+          '接入点',
+          trailing: Text(
+            cfg.endpoints.isEmpty
+                ? '还没有接入点'
+                : '${cfg.endpoints.length} 个 key，各留各的模型',
+            style: const TextStyle(fontSize: 11, color: Sk.dim),
+          ),
+        ),
         SkCard(
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 一条接入点 = 一个 key。点 chip 只换指针，不动任何一条的模型档案。
+              _buildEndpointChips(cfg),
+              const SizedBox(height: 8),
+              const Text(
+                '点一下换接入点：只换指针，每套 key 的模型各自留档，谁也不覆盖谁。长按 chip 可改名或删除。',
+                style: TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
+              ),
+              if (_newEndpoint) ...[
+                const SizedBox(height: 12),
+                SkField(
+                  controller: _endpointName,
+                  label: '接入点名字（可留空）',
+                  hint: '七牛云 / DeepSeek 官方',
+                  onChanged: (_) => _markDirty(),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _newUrlCollision == null
+                      ? '填好地址和 key，保存或添加模型时会新增一条接入点，上一条的模型一条都不动。'
+                      : '这个地址已经有一条接入点「${_newUrlCollision!.label}」。接入点按地址区分，同一个地址不会再加第二条 —— 保存会更新它。要给另一个 key 单独建档，请填它自己的接入地址。',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _newUrlCollision == null ? Sk.dim : Sk.danger,
+                    height: 1.5,
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _cancelNewEndpoint,
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 30),
+                    ),
+                    child: const Text(
+                      '取消新建',
+                      style: TextStyle(fontSize: 12, color: Sk.dim),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 6),
+              const Divider(height: 18, color: Sk.line),
               SkField(
                 controller: _base,
                 label: '接口地址',
@@ -1128,7 +1522,7 @@ class _SettingsPageState extends State<SettingsPage>
               ),
               const SizedBox(height: 6),
               const Text(
-                '换接入点不会丢掉别的接入点下已保存的模型；下面列的是当前这个接入点的模型。',
+                '改地址再保存 = 新增一条接入点（或更新同地址那条）；下面列的是当前这个接入点的模型。',
                 style: TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
               ),
               const SizedBox(height: 14),
@@ -1159,17 +1553,30 @@ class _SettingsPageState extends State<SettingsPage>
             ],
           ),
         ),
-        SkSection(
-          '模型',
-          trailing: Text(
-            saved.isEmpty ? '还没有保存的模型' : '${saved.length} 个',
-            style: const TextStyle(fontSize: 11, color: Sk.dim),
-          ),
-        ),
+        const SkSection('模型'),
         SkCard(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 换接入点后这一行跟着变，下面整个列表也按它重建。
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '当前接入点：${_currentLabel(cfg)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5, color: Sk.dim),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${saved.length} 个模型',
+                    style: const TextStyle(fontSize: 11, color: Sk.dim),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
               // 当前主模型 = 列表里打勾的那一项；换它只改草稿，底部「保存」才写盘。
               Row(
                 children: [
@@ -1196,11 +1603,17 @@ class _SettingsPageState extends State<SettingsPage>
               ),
               const Divider(height: 18, color: Sk.line),
               if (saved.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 4),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text(
-                    '这个接入点下还没有保存的模型，在下面添加一个。',
-                    style: TextStyle(fontSize: 11.5, color: Sk.dim, height: 1.5),
+                    _newEndpoint
+                        ? '新建的接入点还没落地：先在上面填地址和 key，再在下面加一个模型。'
+                        : '这个接入点下还没有保存的模型，在下面添加一个。',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Sk.dim,
+                      height: 1.5,
+                    ),
                   ),
                 )
               else
@@ -1273,7 +1686,7 @@ class _SettingsPageState extends State<SettingsPage>
               const SizedBox(height: 8),
               Text(
                 total > saved.length
-                    ? '添加是追加，不会覆盖已有项，加完自动设为当前。另有 ${total - saved.length} 个模型在别的接入点下，换接口地址即可看到。'
+                    ? '添加是追加，不会覆盖已有项，加完自动设为当前。另有 ${total - saved.length} 个模型在别的接入点下，点上面的接入点就能看到。'
                     : '添加是追加，不会覆盖已有项，加完自动设为当前。固定的模型一直排在列表最前。',
                 style: const TextStyle(fontSize: 11, color: Sk.dim, height: 1.5),
               ),
@@ -2265,6 +2678,129 @@ class _MiniSwitch extends StatelessWidget {
       ),
       trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+}
+
+/// 接入点开关的一格：名字 + 该接入点下的模型数，当前这条高亮。
+/// 点一下 = 切到这条；长按（或点右侧小点）= 重命名 / 删除。
+class _EndpointChip extends StatelessWidget {
+  const _EndpointChip({
+    required this.label,
+    required this.active,
+    required this.onTap,
+    this.count,
+    this.onMenu,
+  });
+
+  final String label;
+
+  /// 该接入点下已存档的模型数；null = 不显示（「＋ 接入点」那一格）。
+  final int? count;
+  final bool active;
+  final VoidCallback onTap;
+  final VoidCallback? onMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = active ? const Color(0xFFD9E4FF) : Sk.dim;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(9),
+        onTap: onTap,
+        onLongPress: onMenu,
+        child: Container(
+          padding: EdgeInsets.fromLTRB(10, 5, onMenu == null ? 10 : 4, 5),
+          decoration: BoxDecoration(
+            color: active
+                ? Sk.primary.withValues(alpha: 0.18)
+                : Sk.bg.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(
+              color: active ? Sk.primary.withValues(alpha: 0.45) : Sk.line,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 128),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: fg,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (count != null) ...[
+                const SizedBox(width: 5),
+                Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: fg.withValues(alpha: 0.75),
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+              if (onMenu != null)
+                IconButton(
+                  onPressed: onMenu,
+                  tooltip: '重命名 / 删除',
+                  splashRadius: 14,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 22,
+                    minHeight: 22,
+                  ),
+                  icon: Icon(Icons.more_horiz_rounded, size: 14, color: fg),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 接入点菜单里的一行：图标 + 文字，删除用危险色。
+class _EndpointMenuRow extends StatelessWidget {
+  const _EndpointMenuRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = danger ? Sk.danger : Sk.text;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(9),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 11),
+          child: Row(
+            children: [
+              Icon(icon, size: 17, color: c),
+              const SizedBox(width: 10),
+              Text(label, style: TextStyle(fontSize: 13, color: c)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
