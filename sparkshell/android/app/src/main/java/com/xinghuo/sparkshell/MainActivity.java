@@ -102,6 +102,21 @@ public class MainActivity extends FlutterActivity {
                                     }).start();
                                     break;
                                 }
+                                case "selfCheck": {
+                                    // 签名自校验 + XFS-1 自检 + 设备凭证。读 APK 全文算哈希要 1–2 s，走后台线程。
+                                    final MethodChannel.Result r = result;
+                                    new Thread(() -> {
+                                        String out;
+                                        try {
+                                            out = SelfCheck.run(getApplicationContext());
+                                        } catch (Throwable t) {
+                                            out = "{\"verdict\":\"error\",\"err\":\"" + t + "\"}";
+                                        }
+                                        final String msg = out;
+                                        main.post(() -> r.success(msg));
+                                    }).start();
+                                    break;
+                                }
                                 case "open": {
                                     String shell = call.argument("shell");
                                     result.success(PtyBridge.open(shell == null ? "/system/bin/sh" : shell));

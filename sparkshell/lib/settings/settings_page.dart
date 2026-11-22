@@ -13,6 +13,7 @@ import 'package:sparkshell/memory/memory_store.dart';
 import 'package:sparkshell/plugins/gallery.dart';
 import 'package:sparkshell/plugins/plugin.dart';
 import 'package:sparkshell/plugins/plugin_store.dart';
+import 'package:sparkshell/security/self_check.dart';
 import 'package:sparkshell/settings/settings_theme.dart';
 
 /// 设置中心。
@@ -117,6 +118,7 @@ class _SettingsPageState extends State<SettingsPage>
     );
     _tab.addListener(_onTabChanged);
     _boot();
+    _loadSelfCheck();
   }
 
   @override
@@ -2568,8 +2570,108 @@ class _SettingsPageState extends State<SettingsPage>
             ],
           ),
         ),
+        const SkSection('安全'),
+        SkCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    _selfCheck == null
+                        ? Icons.shield_outlined
+                        : (_selfCheck!.ok
+                            ? Icons.verified_user_rounded
+                            : Icons.gpp_bad_rounded),
+                    size: 15,
+                    color: _selfCheck == null
+                        ? Sk.dim
+                        : (_selfCheck!.ok ? Sk.ok : Sk.danger),
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    '自检验（签名 + XFS-1）',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Sk.text,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _selfCheck == null ? '检查中…' : _selfCheck!.summary,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: _selfCheck == null
+                          ? Sk.dim
+                          : (_selfCheck!.ok ? Sk.ok : Sk.danger),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _selfCheck == null
+                    ? '正在读安装包算签名证书…'
+                    : '证书 ${_selfCheck!.certShort}…\n'
+                        '设备 ${_selfCheck!.fpShort}…\n'
+                        '令牌 ${_shortToken(_selfCheck!.token)}',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Sk.dim,
+                  height: 1.7,
+                ),
+              ),
+              if (_selfCheck != null && !_selfCheck!.ok) ...[
+                const SizedBox(height: 8),
+                const Text(
+                  '这个包的签名跟仓库里的 keystore 对不上：要么是别人重签的，'
+                  '要么是 keystore 换过而常量没同步。别在上面填 Key。',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Sk.danger,
+                    height: 1.6,
+                  ),
+                ),
+              ],
+              if (_selfCheck != null && _selfCheck!.token.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () async {
+                    await Clipboard.setData(
+                        ClipboardData(text: _selfCheck!.token));
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('设备凭证已复制')),
+                    );
+                  },
+                  child: const Text(
+                    '复制设备凭证',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: Sk.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
       ],
     );
+  }
+
+  SelfCheckResult? _selfCheck;
+
+  String _shortToken(String t) =>
+      t.length <= 18 ? (t.isEmpty ? '—' : t) : '${t.substring(0, 18)}…';
+
+  /// 进设置页时跑一次：Java 侧要读整个 APK 算哈希，1–2 s，不在 build() 里做。
+  Future<void> _loadSelfCheck() async {
+    final r = await runSelfCheck();
+    if (!mounted) return;
+    setState(() => _selfCheck = r);
   }
 
   Widget _actionCard({

@@ -61,3 +61,6 @@ android {
 flutter {
     source = "../.."
 }
+
+// 没有额外依赖：XFS-1 以源码形式编进 APK（app/src/main/java/com/xinghuo/xfs1/Xfs1.java），
+// 避免 jar 里的 java.util.Base64 在 API 26 以下崩，也免得 aar 与源码撞类。
