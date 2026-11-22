@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SparkShell v3.9.0 下载</title>
+<title>SparkShell v3.9.1 下载</title>
 <style>
   :root{
     --bg:#0b0f14; --card:#131a22; --card2:#0f151c; --line:#22303d;
@@ -61,24 +61,24 @@
 
   <header>
     <h1>SparkShell</h1>
-    <span class="tag">v3.9.0</span>
+    <span class="tag">v3.9.1</span>
     <p class="meta" style="margin-top:8px"><p class="meta"><b>换人接手？</b>读仓库根的 <a href="https://github.com/grokggg/sparkshell/blob/main/HANDOFF.md">HANDOFF.md</a>（环境、构建、签名、分发、坑，全在里面），先跑 <code>bash tool/handoff_check.sh</code> 自检 30 秒。</p>
-    <b>包在仓库里：</b>克隆 <code>grokggg/sparkshell</code> 后 <code>dist/</code> 目录下就有 —— <code>app-alpine-3.9.0.apk</code> 整包，<code>app-debian-3.9.0.apk.part*</code> 四片配 <code>join.sh</code> 拼回（179 MB 超过 GitHub 单文件 100 MB 上限，只能切）。</p>
+    <b>包在仓库里：</b>克隆 <code>grokggg/sparkshell</code> 后 <code>dist/</code> 目录下就有 —— <code>app-alpine-3.9.1.apk</code> 整包，<code>app-debian-3.9.1.apk.part*</code> 四片配 <code>join.sh</code> 拼回（134 MB 超过 GitHub 单文件 100 MB 上限，只能切）。</p>
   </header>
   <p class="sub">发布 2026-11-20 21:12 UTC · 仅 arm64 · 自签包名 <code>com.grokggg.sparkshell</code> · 侧载安装</p>
 
   <div class="card">
     <h2>app-alpine.apk <span class="badge">轻 · 62.5 MB</span> <span class="badge full">Alpine</span></h2>
-    <p class="meta" style="margin-top:-4px"><b>3.9.0 改了什么：</b>完整包 —— 自研 XFS-1 算法以源码编进 APK、启动做签名自校验（证书 SHA-256 与编译期常量比对，重签包判 repackaged）、设备凭证令牌可在设置里复制；另含 3.8.5 的 rootfs 单飞解包修复。</p>
-    <p class="meta">62,565,780 B · 秒级冷启动，装完即用；系统工具链需 <code>apk add</code></p>
-    <div class="sha" id="sha-a">sha256 80c4de4a054ea501cd89a76ea59883bd677b1f6d2a2d6fd0d7db3719db068745</div>
+    <p class="meta" style="margin-top:-4px"><b>3.9.1 改了什么：</b>把审计查出来的硬缺口补上 —— ①包内只剩 arm64 的 .so（之前混着 32 位/x86 的插件库，32 位手机「装得上、一开就崩」，还白占 23 MB）；②alpine 62→39 MB、debian 179→134 MB（去掉容器里用不到的 apt 索引与文档）；③rootfs 的 DNS 不再指向 127.0.0.53；④关掉云备份；⑤设置页新增「诊断」：检查更新（带进度）、一键复制诊断信息、最近错误列表；⑥启动即自检，签名不对首页就红条提示。</p>
+    <p class="meta">39,349,939 B · 秒级冷启动，装完即用；系统工具链需 <code>apk add</code></p>
+    <div class="sha" id="sha-a">sha256 c07b3751b2449c30a2165439547713e800a2b7f3cddda703658c98de4a7007bd</div>
     <div id="links-a"></div>
   </div>
 
   <div class="card">
     <h2>app-debian.apk <span class="badge">全 · 179 MB</span> <span class="badge full">Debian bookworm</span></h2>
-    <p class="meta">179,274,048 B · apt / python3 / node / gcc 齐全，glibc 兼容最好</p>
-    <div class="sha" id="sha-d">sha256 745625855d0e0ef6effe980910be91f272d7304d5a4ed3d0bb4441ca5f72c9db</div>
+    <p class="meta">134,143,903 B · apt / python3 / node / gcc 齐全，glibc 兼容最好</p>
+    <div class="sha" id="sha-d">sha256 a407318ac881262d19c28fe3d8ecccd5dee81f7547ce4a2a8b9c370359055e48</div>
     <div id="links-d"></div>
   </div>
 
@@ -104,13 +104,13 @@ sha256sum app-alpine.apk</pre>
       <div class="kv"><span>targetSdk</span><b>28（proot 必需）</b></div>
       <div class="kv"><span>覆盖安装</span><b>同签名即可</b></div>
     </div>
-    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.9.0 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
+    <p class="tips" style="margin-top:12px"><b>签名：</b>所有版本都用 <code>android/keystore/sparkshell.jks</code>（alias <code>sparkshell</code>）自签，所以 1.x → 3.9.1 可以直接覆盖升级，不用卸载。若系统提示「签名不一致」，说明你装过别的包名同款的包，先卸载旧的。</p>
     <p class="tips"><b>应用内更新：</b>走的是 <code>latest.json</code> + 6 路 Range 下载 + sha256 校验。隧道域名一变，应用内更新就失效 —— 这时候用本页链接手动装一次即可，数据不会丢（会话、记忆、容器都在私有目录里）。</p>
   </div>
 
   <footer>
     直链归 GitHub Releases，镜像只是前缀转发；任一镜像 404 就换下一个。<br>
-    Release 页：<span class="url" style="display:inline">https://github.com/grokggg/sparkshell/releases/tag/v3.9.0-apk</span>
+    Release 页：<span class="url" style="display:inline">https://github.com/grokggg/sparkshell/releases/tag/v3.9.1-apk</span>
   </footer>
 </div>
 
@@ -118,7 +118,7 @@ sha256sum app-alpine.apk</pre>
 
 <script>
 const REPO = "grokggg/sparkshell";
-const TAG  = "v3.9.0-apk";
+const TAG  = "v3.9.1-apk";
 const MIRRORS = [
   ["GitHub 直链", ""],
   ["ghfast.top",  "https://ghfast.top/"],
