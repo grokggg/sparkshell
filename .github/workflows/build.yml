@@ -55,7 +55,7 @@ jobs:
           curl -sL -o /tmp/alpine.tgz "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/$F"
           sudo rm -rf /tmp/alp && sudo mkdir -p /tmp/alp
           sudo tar -xzf /tmp/alpine.tgz -C /tmp/alp
-          echo 'nameserver 223.5.5.5' | sudo tee /tmp/alp/etc/resolv.conf >/dev/null
+          printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' | sudo tee /tmp/alp/etc/resolv.conf >/dev/null
           rm -f sparkshell/assets/rootfs.tar
           sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner -C /tmp/alp .
           sudo chown -R $(id -u):$(id -g) sparkshell/assets
@@ -88,6 +88,15 @@ jobs:
           sudo debootstrap --arch=arm64 --foreign --variant=minbase \
             --include=apt,bash,coreutils,curl,ca-certificates,git,python3,less,nano,procps,psmisc,file \
             bookworm /tmp/db http://deb.debian.org/debian 2>&1 | tail -5
+          # 瘦身：apt 索引 50 MB、doc/man 40 MB，在容器里没人看，却让每个用户
+          # 多下 90 MB。debootstrap 第二段只做 dpkg --configure，不读这些目录；
+          # /var/cache/apt/archives 保留 —— 第二段安装依赖它。
+          sudo rm -rf /tmp/db/var/lib/apt/lists/* \
+                      /tmp/db/usr/share/doc/* /tmp/db/usr/share/man/* \
+                      /tmp/db/usr/share/info/* /tmp/db/var/lib/apt/lists/partial/*.deb
+          sudo mkdir -p /tmp/db/var/lib/apt/lists/partial
+          # 镜像里别写死 systemd-resolved 的 127.0.0.53（那是宿主才有的地址）
+          printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' | sudo tee /tmp/db/etc/resolv.conf >/dev/null
           # /dev /proc /sys 由 proot 从宿主 bind 进来，打进包里只会让解包报 mknod 错
           rm -f sparkshell/assets/rootfs.tar
           sudo tar -cf sparkshell/assets/rootfs.tar --numeric-owner \
@@ -102,6 +111,21 @@ jobs:
           flutter build apk --release --target-platform android-arm64 --dart-define=FLAVOR=debian 2>&1 | tail -25
           cp build/app/outputs/flutter-apk/app-release.apk /tmp/app-debian.apk
           ls -lh /tmp/app-debian.apk
+
+      # 只出 arm64 引擎，却可能混进插件自带的三套 .so：32 位设备装得上、一启动就崩。
+      # 这条闸让「包真的是单架构」有据可查，而不是靠人眼看。
+      - name: Verify ABI (arm64 only)
+        run: |
+          set -e
+          for f in /tmp/app-alpine.apk /tmp/app-debian.apk; do
+            bad=$(unzip -l "$f" | grep -cE 'lib/(armeabi|armeabi-v7a|x86|x86_64)/' || true)
+            echo "$(basename "$f") 非 arm64 的 .so 文件数: $bad"
+            if [ "$bad" != "0" ]; then
+              echo "::error::包里仍混有非 arm64 的 .so —— packaging.excludes 没生效"
+              unzip -l "$f" | grep -E 'lib/(armeabi|armeabi-v7a|x86|x86_64)/' | head -20
+              exit 1
+            fi
+          done
 
       - name: Sign + hash
         continue-on-error: true
@@ -405,3 +429,4 @@ jobs:
             1.4.1
             - 修复工具命令没带 PATH（guest 里继承宿主 /system/bin，导致 ls/apk/python3 全 not found）
             - Agent 注入容器事实 preamble（Alpine 用 apk add，Debian 用 apt）
+

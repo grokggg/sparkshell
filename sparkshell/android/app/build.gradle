@@ -36,6 +36,22 @@ android {
         }
     }
 
+    // Flutter 只出 arm64 引擎（libflutter.so / libapp.so 仅 arm64-v8a），
+    // 但 flutter_webrtc 这类插件自带三套 ABI 的 .so —— 结果 APK 里
+    // lib/armeabi-v7a、lib/x86_64 有插件库却没有引擎：
+    // 32 位设备"能装上、一启动就 UnsatisfiedLinkError 闪退"，还白占 23 MB。
+    // 这里在打包阶段按目录剔掉，包才真的是 arm64 单架构。
+    packaging {
+        jniLibs {
+            excludes += [
+                "lib/armeabi-v7a/**",
+                "lib/armeabi/**",
+                "lib/x86/**",
+                "lib/x86_64/**",
+            ]
+        }
+    }
+
     lint {
         // targetSdk 28 是 W^X 的硬要求，Google Play 的过期告警当错误会中断构建
         abortOnError = false

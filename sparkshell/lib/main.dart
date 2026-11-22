@@ -1,15 +1,43 @@
+import 'dart:async';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import 'app_bus.dart';
 import 'chat/chat_page.dart';
+import 'diag.dart';
 import 'files/file_page.dart';
 import 'linux_env.dart';
 import 'linux_page.dart';
+import 'security/self_check.dart';
 import 'ssh_terminal.dart';
 import 'app_version.dart';
 import 'webrtc/remote_page.dart';
 
-void main() => runApp(const SparkShellApp());
+void main() {
+  // 全局兜底：真机闪退时至少留下现场，用户能在「设置 → 诊断」里一键复制。
+  // 之前是 `void main() => runApp(...)`，红屏一闪什么都不剩，只能靠截图猜。
+  runZonedGuarded(
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      final previous = FlutterError.onError;
+      FlutterError.onError = (details) {
+        Diag.add('flutter', details.exception, details.stack);
+        if (previous != null) {
+          previous(details);
+        } else {
+          FlutterError.presentError(details);
+        }
+      };
+      PlatformDispatcher.instance.onError = (error, stack) {
+        Diag.add('platform', error, stack);
+        return true;
+      };
+      runApp(const SparkShellApp());
+    },
+    (error, stack) => Diag.add('zone', error, stack),
+  );
+}
 
 class SparkShellApp extends StatelessWidget {
   const SparkShellApp({super.key});
@@ -57,6 +85,16 @@ class _HomeState extends State<Home> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    // 首帧之后再跑：自检要读整个 APK 算哈希，1–2 秒，不能卡启动。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Diag.boot();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -67,7 +105,13 @@ class _HomeState extends State<Home> {
         ]),
         centerTitle: false,
       ),
-      body: IndexedStack(index: _idx, children: _pages),
+      body: Column(
+        children: [
+          // 启动即自检：不合格的包不该等到用户翻到设置页才发现。
+          _SelfCheckBanner(),
+          Expanded(child: IndexedStack(index: _idx, children: _pages)),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _idx,
         onDestinationSelected: (i) => setState(() => _idx = i),
@@ -143,6 +187,78 @@ class _FilesTabState extends State<_FilesTab> {
                 FilledButton(onPressed: _boot, child: const Text('重试')),
               ]),
             ),
+    );
+  }
+}
+
+/// 顶部红条：只在自检不合格时出现（重签包 / XFS-1 自检不过 / 自检本身报错）。
+/// 合格时什么都不显示 —— 平时别拿它占地方。
+class _SelfCheckBanner extends StatelessWidget {
+  const _SelfCheckBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<SelfCheckResult?>(
+      valueListenable: Diag.selfCheck,
+      builder: (context, sc, _) {
+        if (sc == null || sc.ok) return const SizedBox.shrink();
+        return Material(
+          color: const Color(0xFF3A1520),
+          child: InkWell(
+            onTap: () => _showDetail(context, sc),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.gpp_bad_rounded,
+                      size: 17, color: Color(0xFFFF6B81)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '这个包的签名对不上（${sc.summary}）—— 别在上面填 API Key',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.45,
+                        color: Color(0xFFFFB3BE),
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _showDetail(context, sc),
+                    child: const Text('详情', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDetail(BuildContext context, SelfCheckResult sc) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('自检详情'),
+        content: SingleChildScrollView(
+          child: Text(
+            '结论 ${sc.verdict}\n'
+            '证书 ${sc.cert}\n'
+            '设备指纹 ${sc.fp}\n'
+            'XFS-1 ${sc.xfsOk ? "通过" : "不通过"}\n'
+            '包名 ${sc.pkg}\n'
+            '${sc.err.isEmpty ? "" : "错误 ${sc.err}"}',
+            style: const TextStyle(fontSize: 12, height: 1.6),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.webkit.MimeTypeMap;
 
 import androidx.annotation.NonNull;
@@ -203,6 +204,13 @@ public class MainActivity extends FlutterActivity {
                             } else {
                                 installApk(result, path.trim());
                             }
+                            break;
+                        }
+                        // 「安装未知应用」权限页：Dart 侧收到 need_install_permission 后
+                        // 直接调这个把用户送到系统开关那，省得他自己翻设置。
+                        case "openInstallSettings": {
+                            boolean ok = openInstallSettings();
+                            result.success(ok);
                             break;
                         }
                         default:
@@ -604,6 +612,25 @@ public class MainActivity extends FlutterActivity {
             result.error("no_installer", "系统里没有可用的安装器（可能被停用）", null);
         } catch (Throwable t) {
             result.error("install_failed", "调起安装器失败: " + t.getMessage(), null);
+        }
+    }
+
+    /**
+     * 直接打开本应用的「安装未知应用」开关页。
+     *
+     * Android 8.0+ 每个应用一个开关，用户找起来要翻三四层菜单；这里一步跳过去。
+     * 厂商 ROM 上个别机型没有这个 Activity，返回 false 让 Dart 侧退回文字提示。
+     */
+    private boolean openInstallSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
+        try {
+            Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            return true;
+        } catch (Throwable t) {
+            return false;
         }
     }
 

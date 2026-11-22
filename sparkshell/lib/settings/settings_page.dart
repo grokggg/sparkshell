@@ -9,12 +9,14 @@ import 'package:sparkshell/chat/api_config.dart';
 import 'package:sparkshell/chat/api_endpoint.dart';
 import 'package:sparkshell/chat/llm_client.dart';
 import 'package:sparkshell/chat/model_vault.dart';
+import 'package:sparkshell/diag.dart';
 import 'package:sparkshell/memory/memory_store.dart';
 import 'package:sparkshell/plugins/gallery.dart';
 import 'package:sparkshell/plugins/plugin.dart';
 import 'package:sparkshell/plugins/plugin_store.dart';
 import 'package:sparkshell/security/self_check.dart';
 import 'package:sparkshell/settings/settings_theme.dart';
+import 'package:sparkshell/update/updater.dart';
 
 /// 设置中心。
 ///
@@ -2658,7 +2660,240 @@ class _SettingsPageState extends State<SettingsPage>
             ],
           ),
         ),
+
+        // ---- 诊断：出问题时用户能一键把现场给我 -------------------------
+        const SkSection('诊断'),
+        SkCard(
+          child: Column(
+            children: [
+            _diagTile(
+              icon: Icons.system_update_alt_rounded,
+              title: '检查更新',
+              subtitle: '当前 $appVersion+$appCode',
+              onTap: _checkUpdate,
+            ),
+            _diagTile(
+              icon: Icons.copy_all_rounded,
+              title: '复制诊断信息',
+              subtitle: '版本 / 自检 / 最近错误，出事直接粘给我',
+              onTap: _copyDiag,
+            ),
+            _diagTile(
+              icon: Icons.bug_report_outlined,
+              title: '最近错误',
+              subtitle: Diag.lines.isEmpty
+                  ? '这次启动还没有错误'
+                  : '${Diag.lines.length} 条（点开看）',
+              onTap: _showDiagLog,
+            ),
+            ],
+          ),
+        ),
       ],
+    );
+  }
+
+  // ---------------------------------------------------------------- 诊断 ----
+
+  Widget _diagTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 4),
+        child: Row(
+          children: [
+            Icon(icon, size: 17, color: Sk.dim),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(fontSize: 13, color: Sk.text)),
+                  const SizedBox(height: 2),
+                  Text(subtitle,
+                      style: const TextStyle(fontSize: 11, color: Sk.dim)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, size: 18, color: Sk.dim),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 复制诊断信息。诊断串拼的是「用户能贴出来」的最小集合。
+  Future<void> _copyDiag() async {
+    final sc = Diag.selfCheck.value;
+    final text = Diag.dump(
+      version: appVersion,
+      code: appCode,
+      extra: sc == null ? '' : '模式 ${sc.verdict}',
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('诊断信息已复制（${Diag.maxLines} 行上限）')),
+    );
+  }
+
+  void _showDiagLog() {
+    final lines = Diag.lines;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('最近错误 ${lines.length} 条'),
+        content: SizedBox(
+          width: 360,
+          height: 320,
+          child: lines.isEmpty
+              ? const Center(
+                  child: Text('这次启动还没有错误',
+                      style: TextStyle(fontSize: 12)),
+                )
+              : SingleChildScrollView(
+                  child: SelectableText(
+                    lines.join('\n'),
+                    style: const TextStyle(fontSize: 11, height: 1.5),
+                  ),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+              if (!ctx.mounted) return;
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('复制全部'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 检查更新 → 下载 → 校验 → 调起安装器。流程跟聊天页那个入口一致，
+  /// 区别是这里给出下载进度，不至于让用户以为卡住。
+  Future<void> _checkUpdate() async {
+    final up = Updater();
+    String status = '正在检查…';
+    String? error;
+    UpdateInfo? info;
+    double progress = 0;
+    bool busy = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Future<void> check() async {
+            setS(() {
+              status = '正在检查…';
+              error = null;
+            });
+            try {
+              final r = await up.check(
+                currentVersion: appVersion,
+                currentCode: appCode,
+              );
+              setS(() {
+                info = r;
+                status = r == null ? '已是最新（$appVersion+$appCode）' : '发现 ${r.version}';
+              });
+            } catch (e) {
+              setS(() {
+                error = '$e';
+                status = '检查失败';
+              });
+              Diag.add('update', e);
+            }
+          }
+
+          Future<void> install() async {
+            final target = info;
+            if (target == null) return;
+            setS(() {
+              busy = true;
+              error = null;
+              status = '下载中…';
+            });
+            try {
+              final path = await up.download(
+                target,
+                onProgress: (p) => setS(() {
+                  progress = p;
+                  status = '下载中 ${(p * 100).toStringAsFixed(0)}%';
+                }),
+              );
+              setS(() => status = '下载完成，正在调起安装器…');
+              await up.install(path);
+              await up.clearCache();
+              setS(() => status = '已调起安装器，按提示覆盖安装即可');
+            } catch (e) {
+              setS(() {
+                error = '$e';
+                status = '安装未完成';
+              });
+              Diag.add('update', e);
+            } finally {
+              setS(() => busy = false);
+            }
+          }
+
+          if (status == '正在检查…' && !busy) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => check());
+          }
+
+          return AlertDialog(
+            title: const Text('检查更新'),
+            content: SizedBox(
+              width: 340,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(status, style: const TextStyle(fontSize: 13)),
+                  if (info != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '${info!.version}（build ${info!.code}）\n${info!.notes}',
+                      style: const TextStyle(fontSize: 11.5, color: Sk.dim, height: 1.6),
+                    ),
+                  ],
+                  if (busy) ...[
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(value: progress == 0 ? null : progress),
+                  ],
+                  if (error != null) ...[
+                    const SizedBox(height: 10),
+                    Text(error!,
+                        style: const TextStyle(fontSize: 11.5, color: Sk.danger)),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              if (info != null && !busy)
+                FilledButton(onPressed: install, child: const Text('下载并安装')),
+              TextButton(
+                onPressed: busy ? null : () => Navigator.of(ctx).pop(),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

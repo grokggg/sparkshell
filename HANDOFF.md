@@ -3,7 +3,7 @@
 给下一个沙箱/接手的 AI：**这份文档就是全部上下文**。读完这一页你就能继续干活，不需要再问用户"之前做到哪了"。
 用户不是程序员，所有动手的事都由沙箱完成；他只验收结果和链接。
 
-最后更新：2026-11-22 · 版本 **3.9.0+53** · 分支 `main` HEAD `4657986`
+最后更新：2026-11-22 · 版本 **3.9.1+54** · 分支 `main` HEAD 见 GitHub
 
 ---
 
@@ -25,7 +25,7 @@
 
 - 包名 `com.grokggg.sparkshell`，**Java 包名是 `com.xinghuo.sparkshell`**（历史遗留，两套名字并存，别"顺手统一"，会炸 MainActivity 路径和 XFS-1 常量）
 - targetSdk **必须 28**：≥29 时 Android 禁止在私有目录 exec，proot 起不来。不是懒得升。
-- minSdk 跟随 `flutter.minSdkVersion`（21），所以 Java 侧不能用 `java.util.Base64`、`String.join` 这类 API 26+ 的东西
+- minSdk 跟随 `flutter.minSdkVersion`（当前 Flutter 是 **24**，不是 21），所以 Java 侧不能用 `java.util.Base64`、`String.join` 这类 API 26+ 的东西
 - rootfs 两种口味：Debian bookworm（179 MB，apt/python3/node/gcc 全）与 Alpine 3.20（62 MB，快）
 
 ---
@@ -80,6 +80,20 @@ grokggg/sparkshell  (public)
 ```
 
 ---
+
+
+### 3.9.1 补的（本轮）
+
+| 补了什么 | 为什么 |
+|---|---|
+| `packaging { jniLibs { excludes } }` 剔除 armeabi-v7a/x86/x86_64 | Flutter 只出 arm64 引擎，插件却带三套 .so → 32 位设备「装得上、一启动就崩」，还白占 23 MB。CI 新增 `Verify ABI` 闸，包里再混进非 arm64 会直接 fail |
+| Debian rootfs 瘦身（apt 索引 / doc / man / info） | 约 90 MB 是容器里永远用不到的东西，用户每次更新都要多下 |
+| rootfs 内 resolv.conf 改 223.5.5.5 + 119.29.29.29 | 镜像里是 systemd-resolved 的 127.0.0.53，proot 里根本不通（运行期 start.sh 也会重写，双保险） |
+| `allowBackup=false` | 不关的话整包 rootfs（含 root 家目录）会进云备份 |
+| 全局错误捕获 + 启动自检 + 顶部红条 | 之前 `main()` 只有一行 runApp，闪退不留现场；自检也只躺在设置页 |
+| 设置 →「诊断」区：检查更新 / 复制诊断信息 / 最近错误 | 非程序员用户报问题只能截图；现在一键复制版本+自检+错误栈 |
+| 「安装未知应用」直达 | need_install_permission 时直接跳系统开关页 |
+| 聊天导出写死 `2.0.0` → `appVersion` | 导出文件里的版本一直是错的 |
 
 ## 4. 构建与签名
 
@@ -237,6 +251,7 @@ python3 -c "import zipfile;zipfile.ZipFile('dart.zip').extractall('.')"; chmod +
 - **native 层**：XFS-1 与自校验都还在 Java，无 `.so`。要升难度必须 NDK（CI 目前只产 arm64-v8a）
 - **keystore 在 public 仓库**：任何人都能用它签一个"签名相同"的包。用户明确表示这是他的产物、他自己决定；要收紧就挪进 CI secrets
 - **真机反馈缺失**：3.8.4 多接入点、3.8.5 rootfs 修复、3.9.0 自检，用户都还没回报装完的表现
+- **无前台服务/唤醒锁**：息屏后 proot 里的进程可能被系统回收（apt 跑到一半被杀），3.9.2 候选
 - **UI 未渲染验证**：设置页「安全」区、接入点 chips、Chat 第 4 段都只有源码断言
 - **腾讯云安全组只开 22**：80/443/8080 公网不可达，所以只能走隧道，纯 IP 直链做不了
 - **CI workflow 不在本地 checkout**：要改它得 `GET /repos/.../contents/.github/workflows/build.yml`

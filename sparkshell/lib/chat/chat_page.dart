@@ -1700,7 +1700,7 @@ tags: debian, alpine, toolchain
       await f.writeAsString(
         const JsonEncoder.withIndent('  ').convert({
           'app': 'SparkShell',
-          'version': '2.0.0',
+          'version': appVersion,
           'exportedAt': DateTime.now().toIso8601String(),
           'model': _cfg?.model ?? '',
           'messages': _msgs.map((m) => {'role': m.role, 'text': m.text}).toList(),

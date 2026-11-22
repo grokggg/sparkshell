@@ -534,8 +534,19 @@ class Updater {
       return ok ?? false;
     } on PlatformException catch (e) {
       if (e.code == 'need_install_permission') {
+        // 顺手把用户送到「安装未知应用」开关页；打不开才让他自己翻设置。
+        bool jumped = false;
+        try {
+          final bool? r =
+              await _io.invokeMethod<bool>('openInstallSettings');
+          jumped = r ?? false;
+        } catch (_) {
+          jumped = false;
+        }
         throw UpdateException(
-          '需要「安装未知应用」权限：请在系统设置里允许 SparkShell 安装应用后重试',
+          jumped
+              ? '已打开「安装未知应用」开关页：允许 SparkShell 安装应用，回来再点一次安装'
+              : '需要「安装未知应用」权限：请在系统设置里允许 SparkShell 安装应用后重试',
           e,
         );
       }
